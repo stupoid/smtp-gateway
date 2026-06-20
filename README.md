@@ -213,6 +213,77 @@ needs mutable state.
 | CHUNKING / BDAT (RFC 3030) | Planned |
 | SMTP AUTH | Not yet |
 
+## Logging
+
+The server emits structured log events through the `Logger` interface.
+Pass `smtpgateway.Slog(slog.Default())` for standard output, `nil` to
+discard, or implement your own adapter.
+
+### Interface
+
+```go
+type Logger interface {
+    Debug(msg string, args ...any)
+    Info(msg string, args ...any)
+    Error(msg string, args ...any)
+}
+```
+
+The `args` variadic is modelled on `slog` key=value pairs — each pair
+is a `slog.Attr`.  Use `slog.String`, `slog.Int`, `slog.Duration`, etc.
+
+### Built-in adapter
+
+`smtpgateway.Slog(l)` wraps a `*slog.Logger`:
+- `Debug` → `slog.LevelDebug`
+- `Info` → `slog.LevelInfo`
+- `Error` → `slog.LevelError`
+
+Control output format and level via the standard `slog` handler:
+
+```go
+// JSON to stderr with debug logging
+srv.Logger = smtpgateway.Slog(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+    Level: slog.LevelDebug,
+})))
+
+// Text to a file
+f, _ := os.OpenFile("/var/log/smtp-gateway.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+srv.Logger = smtpgateway.Slog(slog.New(slog.NewTextHandler(f, nil)))
+```
+
+### Custom logger
+
+Implement the two-method interface to send events to any sink:
+
+```go
+type syslogLogger struct{}
+
+func (s *syslogLogger) Debug(msg string, args ...any) {}
+func (s *syslogLogger) Info(msg string, args ...any)  {}
+func (s *syslogLogger) Error(msg string, args ...any) {}
+
+srv.Logger = &syslogLogger{}
+```
+
+### Events
+
+| Event | Level | Attrs |
+|-------|-------|-------|
+| `connection_opened` | Info | `remote` |
+| `connection_closed` | Info | `remote` |
+| `smtp_recv` | Info | `verb`, `args` (truncated) |
+| `data_received` | Info | `bytes`, `mail_from`, `recipients` |
+| `read_error` | Error | `error` |
+| `data_read_error` | Error | `error` |
+| `tls_handshake_error` | Error | `error` |
+| `max_connections_reached` | Error | — |
+| `postcat_write_error` | Error | `error`, `path` |
+| `max_message_size` | Info | `bytes` (at startup) |
+
+Every event is a single line; fields are `key=value` pairs.  Pipe
+through `jq` for filtering when using JSON output.
+
 ## License
 
 MIT
