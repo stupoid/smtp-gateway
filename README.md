@@ -15,8 +15,8 @@ Kafka, the local filesystem, `/dev/null`, or anywhere else.
 - **Raw body** — receive the complete RFC 5322 message (headers + body) at DATA
 - **Configurable responses** — set exact SMTP status codes from your handler
 - **Graceful shutdown** — drain active connections
-- **Postcat output** — optional built-in sink that writes Postfix-compatible
-  queue files (readable by `postcat`)
+- **Postcat sink** — optional flat-file output in Postfix-compatible format;
+  capture messages during setup before you wire up a real backend
 - **Minimal dependencies** — standard library only
 - **Concurrency** — one goroutine per connection with configurable limits
 
@@ -117,23 +117,53 @@ ln, _ := net.Listen("tcp", ":587")
 srv.Serve(ln)
 ```
 
-## Write to postcat directory
+## Postcat sink
 
-Set `PostcatDir` and accepted messages are automatically written in a format
-compatible with Postfix `postcat(1)`:
+The `PostcatDir` option writes each accepted message as a flat file in
+[Postfix `postcat(1)`](https://www.postfix.org/postcat.1.html) format.
+It's a convenience sink — use it when you're setting up the gateway and
+haven't decided on a final storage backend yet. Every file captures the
+full envelope (sender, recipients, timestamp) and raw message body, so you
+can replay or migrate them later without losing any data.
 
 ```go
-srv.PostcatDir = "/var/spool/mail/incoming"
+srv := smtpgateway.Server{
+    PostcatDir: "/var/spool/mail/incoming",
+    // ... other fields
+}
 ```
 
-Then parse them later:
+### CLI reader
+
+A standalone `postcat` command reads individual files for testing and
+inspection:
+
+```
+$ go build -o postcat ./cmd/postcat/
+$ ./postcat $HOME/mail/incoming/1718832000-12345.eml
+Sender:     sender@example.com
+Recipients: [rcpt1@example.com rcpt2@example.com]
+Time:       2024-06-20 09:30:00
+Body size:  1024 bytes
+
+--- Raw message ---
+Subject: Test
+...
+```
+
+### Programmatic access
 
 ```go
-msg, err := smtpgateway.ParsePostcat("/var/spool/mail/incoming/1718832000-12345.eml")
+import "github.com/stupoid/smtp-gateway/internal/postcat"
+
+msg, err := postcat.Parse("/path/to/file.eml")
 fmt.Println("from:", msg.Sender)
 fmt.Println("to:",   msg.Recipients)
 fmt.Println("raw:",  string(msg.RawMessage))
 ```
+
+See `cmd/verify-postcat/` for a batch verification tool that scans
+directories.
 
 ## Handler contract
 

@@ -162,7 +162,7 @@ type Server struct {
 
 	// PostcatDir, when non-empty, causes the server to write each
 	// accepted message as a Postfix-queue-file-compatible file in
-	// this directory (see WritePostcat).
+	// this directory (see internal/postcat).
 	PostcatDir string
 
 	// --- internal ---

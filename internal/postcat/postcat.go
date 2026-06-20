@@ -1,4 +1,9 @@
-package smtpgateway
+// Package postcat provides reading and writing of postcat-format envelope
+// files, compatible with Postfix's postcat(1) output format.
+//
+// Files contain envelope records (S, R, T lines) followed by a blank line
+// and the raw RFC 5322 message body.
+package postcat
 
 import (
 	"bufio"
@@ -9,24 +14,19 @@ import (
 	"time"
 )
 
-// PostcatMessage is a parsed postcat-format email file.
-type PostcatMessage struct {
+// Message is a parsed postcat-format email file.
+type Message struct {
 	Sender     string
 	Recipients []string
 	Time       time.Time
 	RawMessage []byte // full RFC 5322 message (headers + body)
 }
 
-// WritePostcat writes an accepted message to dir in a format compatible
-// with Postfix's postcat(1) utility.  The file is named
-// <unix-timestamp>-<sequence> and contains envelope records followed
-// by a blank line and the raw message.
-//
-// Returns the full path to the written file.
-func WritePostcat(dir string, tx *Tx, body []byte) (string, error) {
+// Write writes an accepted message to dir.  The file is named
+// <unix-timestamp>-<nanosecond>.eml and contains envelope records
+// followed by a blank line and the raw message.
+func Write(dir, mailFrom string, accepted []string, body []byte) (string, error) {
 	now := time.Now()
-
-	// Simple unique filename: timestamp + nanosecond.
 	name := fmt.Sprintf("%d-%d.eml", now.Unix(), now.Nanosecond())
 	path := filepath.Join(dir, name)
 
@@ -39,8 +39,8 @@ func WritePostcat(dir string, tx *Tx, body []byte) (string, error) {
 	w := bufio.NewWriter(f)
 
 	// Envelope records.
-	_, _ = fmt.Fprintf(w, "S %s\n", senderOrEmpty(tx.MailFrom))
-	for _, rcpt := range tx.Accepted {
+	_, _ = fmt.Fprintf(w, "S %s\n", senderOrEmpty(mailFrom))
+	for _, rcpt := range accepted {
 		_, _ = fmt.Fprintf(w, "R %s\n", rcpt)
 	}
 	_, _ = fmt.Fprintf(w, "T %s\n", now.Format(time.RFC3339))
@@ -54,17 +54,17 @@ func WritePostcat(dir string, tx *Tx, body []byte) (string, error) {
 	return path, w.Flush()
 }
 
-// ParsePostcat reads a postcat-format file from path and returns the
-// parsed message.  It reads envelope records (S, R, T lines) until a
-// blank line, then treats the remainder as the raw RFC 5322 message.
-func ParsePostcat(path string) (*PostcatMessage, error) {
+// Parse reads a postcat-format file from path and returns the parsed
+// message.  It reads envelope records (S, R, T lines) until a blank
+// line, then treats the remainder as the raw RFC 5322 message.
+func Parse(path string) (*Message, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("open postcat file: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
-	m := &PostcatMessage{}
+	m := &Message{}
 	scanner := bufio.NewScanner(f)
 	inBody := false
 	var bodyLines []string

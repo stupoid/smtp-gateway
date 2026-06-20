@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	smtp "github.com/stupoid/smtp-gateway"
+	"github.com/stupoid/smtp-gateway/internal/postcat"
 )
 
 func main() {
@@ -18,7 +18,7 @@ func main() {
 	pass := 0
 	for _, e := range entries {
 		path := filepath.Join(os.Args[1], e.Name())
-		msg, err := smtp.ParsePostcat(path)
+		msg, err := postcat.Parse(path)
 		if err != nil {
 			fmt.Printf("FAIL %s: %v\n", e.Name(), err)
 			os.Exit(1)

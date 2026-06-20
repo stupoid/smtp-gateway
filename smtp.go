@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/stupoid/smtp-gateway/internal/postcat"
 )
 
 // --- SMTP protocol helpers ---
@@ -473,7 +475,7 @@ func (s *Server) handleData(
 
 	// Write postcat file if configured and accepted.
 	if resp != nil && resp.Code == 250 && s.PostcatDir != "" {
-		if path, err := WritePostcat(s.PostcatDir, tx, body); err != nil {
+		if path, err := postcat.Write(s.PostcatDir, tx.MailFrom, tx.Accepted, body); err != nil {
 			s.logError("postcat_write_error",
 				slog.String("error", err.Error()),
 				slog.String("path", path),
