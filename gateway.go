@@ -42,6 +42,7 @@ var (
 	RespSysError     = &Response{451, "4.3.0 System error"}
 	RespVrfyDisabled = &Response{252, "2.0.0 VRFY not supported"}
 	RespMessageSize  = &Response{552, "5.3.4 Message size exceeds fixed limit"}
+	RespEightBit     = &Response{550, "5.6.3 Message contains 8-bit data but BODY=8BITMIME not specified"}
 )
 
 // Rejection records a recipient that was rejected at the RCPT TO phase.

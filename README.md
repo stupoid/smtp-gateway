@@ -206,8 +206,9 @@ needs mutable state.
 | EHLO / HELO | ✅ |
 | PIPELINING (RFC 2920) | ✅ |
 | STARTTLS | ✅ |
-| 8BITMIME | ✅ |
-| SMTPUTF8 | ✅ |
+| 8BITMIME | ✅ with enforcement (rejects 8-bit data without BODY=8BITMIME) |
+| ENHANCEDSTATUSCODES | ✅ |
+| SMTPUTF8 | Advertised |
 | SIZE | ✅ |
 | Graceful shutdown | ✅ |
 | CHUNKING / BDAT (RFC 3030) | Planned |

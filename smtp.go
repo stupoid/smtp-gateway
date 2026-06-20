@@ -310,6 +310,7 @@ func (s *Server) handleEhlo(
 	ext = append(ext, s.Hostname+" Hello "+tx.Helo)
 	ext = append(ext, "PIPELINING")
 	ext = append(ext, "8BITMIME")
+	ext = append(ext, "ENHANCEDSTATUSCODES")
 	ext = append(ext, "SMTPUTF8")
 	if s.TLSConfig != nil {
 		ext = append(ext, "STARTTLS")
@@ -462,6 +463,17 @@ func (s *Server) handleData(
 		return &Response{451, "4.3.0 Error reading message"}
 	}
 
+	// 8BITMIME check: if the client didn't declare BODY=8BITMIME,
+	// reject 8-bit content per RFC 6152.
+	if !strings.EqualFold(tx.Params["BODY"], "8BITMIME") && contains8Bit(body) {
+		resumeCh <- struct{}{}
+		s.logInfo("8bit_rejected",
+			slog.String("mail_from", tx.MailFrom),
+			slog.Int("bytes", len(body)),
+		)
+		return RespEightBit
+	}
+
 	// Signal the reader goroutine to resume.
 	resumeCh <- struct{}{}
 
@@ -597,6 +609,16 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+// contains8Bit reports whether b contains any byte with the high bit set.
+func contains8Bit(b []byte) bool {
+	for _, c := range b {
+		if c > 127 {
+			return true
+		}
+	}
+	return false
 }
 
 // newTx creates a fresh transaction state for a new connection.
