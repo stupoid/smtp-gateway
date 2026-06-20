@@ -16,5 +16,7 @@ go.work
 go.work.sum
 
 # Built test helpers
-test-server
-verify-postcat
+/test-server
+/verify-postcat
+/postcat-replay
+/postcat

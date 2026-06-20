@@ -165,6 +165,27 @@ fmt.Println("raw:",  string(msg.RawMessage))
 See `cmd/verify-postcat/` for a batch verification tool that scans
 directories.
 
+### Replay into an SMTP server
+
+`postcat-replay` replays captured postcat files through any SMTP server
+— useful for migration, testing, or debugging:
+
+```
+$ go build -o postcat-replay ./cmd/postcat-replay/
+$ ./postcat-replay -addr :2525 /var/spool/mail/incoming/*.eml
+OK   /var/spool/mail/incoming/file1.eml
+OK   /var/spool/mail/incoming/file2.eml
+FAIL /var/spool/mail/incoming/bad.eml: no recipients in postcat file
+```
+
+It opens a fresh connection per file and replays the full SMTP
+transaction (EHLO → MAIL FROM → RCPT TO → DATA → QUIT).  Null senders
+(`<>`) are handled correctly.  Batch-replay multiple files by passing
+them as positional arguments — exits non-zero if any file fails.
+
+Flags:
+- `-addr` — SMTP server address (default `:2525`)
+
 ## Handler contract
 
 - **Hello** — called after HELO/EHLO. Reject to close the connection.
