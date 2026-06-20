@@ -1,0 +1,28 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - revive
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+linters-settings:
+  misspell:
+    locale: US
+  revive:
+    rules:
+      - name: blank-imports
+      - name: exported
+      - name: indent-error-flow
+      - name: range
+      - name: superfluous-else
+      - name: unreachable-code
