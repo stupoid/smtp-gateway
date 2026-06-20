@@ -14,3 +14,7 @@
 # Go workspace
 go.work
 go.work.sum
+
+# Built test helpers
+test-server
+verify-postcat
