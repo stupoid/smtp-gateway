@@ -63,7 +63,7 @@ func replay(addr, path string) error {
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	r := bufio.NewReader(conn)
 

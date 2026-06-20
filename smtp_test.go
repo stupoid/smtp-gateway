@@ -134,8 +134,8 @@ func TestParseRcptTo(t *testing.T) {
 
 func TestReadDotUnstuffed_Normal(t *testing.T) {
 	srv, cli := net.Pipe()
-	defer srv.Close()
-	defer cli.Close()
+	defer func() { _ = srv.Close() }()
+	defer func() { _ = cli.Close() }()
 
 	input := "Subject: hello\r\n\r\nbody line 1\r\nbody line 2\r\n.\r\n"
 	go func() {
@@ -157,8 +157,8 @@ func TestReadDotUnstuffed_Normal(t *testing.T) {
 
 func TestReadDotUnstuffed_DotStuffing(t *testing.T) {
 	srv, cli := net.Pipe()
-	defer srv.Close()
-	defer cli.Close()
+	defer func() { _ = srv.Close() }()
+	defer func() { _ = cli.Close() }()
 
 	// Lines starting with '.' get one leading dot stripped (dot-unstuffing).
 	input := "Subject: hello\r\n.leading dot line\r\n.\r\n"
@@ -181,8 +181,8 @@ func TestReadDotUnstuffed_DotStuffing(t *testing.T) {
 
 func TestReadDotUnstuffed_MaxSize(t *testing.T) {
 	srv, cli := net.Pipe()
-	defer srv.Close()
-	defer cli.Close()
+	defer func() { _ = srv.Close() }()
+	defer func() { _ = cli.Close() }()
 
 	input := "line one\r\nline two\r\n.\r\n"
 	go func() {
@@ -199,8 +199,8 @@ func TestReadDotUnstuffed_MaxSize(t *testing.T) {
 
 func TestReadDotUnstuffed_EOFBeforeTerminator(t *testing.T) {
 	srv, cli := net.Pipe()
-	defer srv.Close()
-	defer cli.Close()
+	defer func() { _ = srv.Close() }()
+	defer func() { _ = cli.Close() }()
 
 	input := "incomplete body without terminator"
 	go func() {
@@ -301,22 +301,22 @@ func (h *countingHandler) record(id int, phase string) {
 	h.mu.Unlock()
 }
 
-func (h *countingHandler) Hello(ctx context.Context, tx *Tx) *Response {
+func (h *countingHandler) Hello(_ context.Context, _ *Tx) *Response {
 	h.record(0, "hello")
 	return RespHelloOK
 }
 
-func (h *countingHandler) MailFrom(ctx context.Context, tx *Tx) *Response {
+func (h *countingHandler) MailFrom(_ context.Context, _ *Tx) *Response {
 	h.record(0, "mail")
 	return RespMailOK
 }
 
-func (h *countingHandler) RcptTo(ctx context.Context, tx *Tx) *Response {
+func (h *countingHandler) RcptTo(_ context.Context, _ *Tx) *Response {
 	h.record(0, "rcpt")
 	return RespRcptOK
 }
 
-func (h *countingHandler) Data(ctx context.Context, tx *Tx, body []byte) *Response {
+func (h *countingHandler) Data(_ context.Context, _ *Tx, body []byte) *Response {
 	h.record(0, "data")
 	h.mu.Lock()
 	h.lastBody[0] = string(body)
@@ -343,7 +343,7 @@ func TestServerConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	var serveErr error
 	go func() {
@@ -373,17 +373,17 @@ func TestServerConcurrency(t *testing.T) {
 		}
 	}
 
-	l.Close()
+	_ = l.Close()
 	_ = srv.Shutdown(context.Background())
 }
 
 // smtpSession performs a complete SMTP transaction over a TCP connection.
-func smtpSession(t *testing.T, addr string, id int) error {
+func smtpSession(_ *testing.T, addr string, id int) error {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 
@@ -577,7 +577,7 @@ func TestServerWithBodyVerification(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	go func() { _ = srv.Serve(l) }()
 	addr := l.Addr().String()
@@ -597,7 +597,7 @@ func TestServerWithBodyVerification(t *testing.T) {
 				errs[id] = err
 				return
 			}
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 			if err := expectLine(rw, "220"); err != nil {
 				errs[id] = err
@@ -607,7 +607,7 @@ func TestServerWithBodyVerification(t *testing.T) {
 				_, _ = rw.WriteString(cmd)
 				return rw.Flush()
 			}
-			send("EHLO c" + itoa(id) + "\r\n")
+			_ = send("EHLO c" + itoa(id) + "\r\n")
 			// Read multi-line EHLO response.
 			for {
 				l, _ := rw.ReadString('\n')
@@ -615,16 +615,16 @@ func TestServerWithBodyVerification(t *testing.T) {
 					break
 				}
 			}
-			send("MAIL FROM:<s" + itoa(id) + "@test>\r\n")
-			expectLine(rw, "250")
-			send("RCPT TO:<r" + itoa(id) + "@test>\r\n")
-			expectLine(rw, "250")
-			send("DATA\r\n")
-			expectLine(rw, "354")
-			send(bodies[id] + "\r\n.\r\n")
-			expectLine(rw, "250")
-			send("QUIT\r\n")
-			expectLine(rw, "221")
+			_ = send("MAIL FROM:<s" + itoa(id) + "@test>\r\n")
+			_ = expectLine(rw, "250")
+			_ = send("RCPT TO:<r" + itoa(id) + "@test>\r\n")
+			_ = expectLine(rw, "250")
+			_ = send("DATA\r\n")
+			_ = expectLine(rw, "354")
+			_ = send(bodies[id] + "\r\n.\r\n")
+			_ = expectLine(rw, "250")
+			_ = send("QUIT\r\n")
+			_ = expectLine(rw, "221")
 		}(i)
 	}
 	wg.Wait()
@@ -635,7 +635,7 @@ func TestServerWithBodyVerification(t *testing.T) {
 		}
 	}
 
-	l.Close()
+	_ = l.Close()
 	_ = srv.Shutdown(context.Background())
 
 	// Verify postcat files: no cross-contamination.
@@ -658,7 +658,7 @@ func TestServerWithBodyVerification(t *testing.T) {
 
 type acceptAllHandler struct{}
 
-func (h *acceptAllHandler) Hello(ctx context.Context, tx *Tx) *Response { return RespHelloOK }
-func (h *acceptAllHandler) MailFrom(ctx context.Context, tx *Tx) *Response { return RespMailOK }
-func (h *acceptAllHandler) RcptTo(ctx context.Context, tx *Tx) *Response { return RespRcptOK }
-func (h *acceptAllHandler) Data(ctx context.Context, tx *Tx, body []byte) *Response { return RespDataOK }
+func (h *acceptAllHandler) Hello(_ context.Context, _ *Tx) *Response          { return RespHelloOK }
+func (h *acceptAllHandler) MailFrom(_ context.Context, _ *Tx) *Response       { return RespMailOK }
+func (h *acceptAllHandler) RcptTo(_ context.Context, _ *Tx) *Response         { return RespRcptOK }
+func (h *acceptAllHandler) Data(_ context.Context, _ *Tx, _ []byte) *Response { return RespDataOK }

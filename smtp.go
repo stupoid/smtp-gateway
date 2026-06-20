@@ -51,7 +51,7 @@ const (
 
 func (s *Server) handleConn(netConn net.Conn) {
 	remote := netConn.RemoteAddr().String()
-	s.logInfo("connection_opened", slog.String("remote", remote))
+	s.logDebug("connection_opened", slog.String("remote", remote))
 
 	conn := &connState{
 		netConn: netConn,
@@ -61,7 +61,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 
 	defer func() {
 		_ = conn.Close()
-		s.logInfo("connection_closed", slog.String("remote", remote))
+		s.logDebug("connection_closed", slog.String("remote", remote))
 	}()
 
 	// Apply read deadlines and idle timeout.
@@ -439,6 +439,7 @@ func (s *Server) handleData(
 	phase int, resumeCh chan<- struct{},
 ) *Response {
 	if phase < phaseRcpt {
+		resumeCh <- struct{}{}
 		return &Response{503, "5.5.1 RCPT required first"}
 	}
 	if len(tx.Accepted) == 0 {
