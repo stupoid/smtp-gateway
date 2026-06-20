@@ -257,6 +257,9 @@ func readDotUnstuffed(r *bufio.Reader, maxSize int, conn *connState, readTimeout
 // exceeds MaxMessageSize.
 var ErrMessageTooLarge = errors.New("message exceeds maximum size")
 
+// ErrBadSyntax is returned when an SMTP command argument cannot be parsed.
+var ErrBadSyntax = errors.New("bad SMTP command syntax")
+
 // --- Command handlers ---
 
 func (s *Server) handleHelo(
@@ -371,7 +374,10 @@ func (s *Server) handleMail(
 	}
 
 	// Parse "FROM:<reverse-path> [SIZE=... BODY=...]"
-	from, params := parseMailFrom(cmd.args)
+	from, params, err := parseMailFrom(cmd.args)
+	if err != nil {
+		return &Response{501, "5.5.4 Bad MAIL FROM syntax"}
+	}
 	tx.MailFrom = from
 	tx.Params = params
 	tx.Rcpts = nil
@@ -481,26 +487,27 @@ func (s *Server) handleData(
 // --- Address parsing ---
 
 // parseMailFrom extracts the reverse-path and optional parameters from
-// a MAIL FROM argument string.
-func parseMailFrom(args string) (string, map[string]string) {
+// a MAIL FROM argument string.  Returns ErrBadSyntax if the argument
+// cannot be parsed.
+func parseMailFrom(args string) (string, map[string]string, error) {
 	params := map[string]string{}
 	rest := strings.TrimSpace(args)
 
 	// Expect "FROM:<...>" or "FROM:<>"
 	if !strings.HasPrefix(strings.ToUpper(rest), "FROM:") {
-		return "", params
+		return "", params, ErrBadSyntax
 	}
 	rest = rest[5:] // skip "FROM:"
 	rest = strings.TrimSpace(rest)
 	if rest == "" {
-		return "", params
+		return "", params, ErrBadSyntax
 	}
 	if rest[0] != '<' {
-		return "", params
+		return "", params, ErrBadSyntax
 	}
 	closingBracket := strings.IndexByte(rest, '>')
 	if closingBracket < 0 {
-		return "", params
+		return "", params, ErrBadSyntax
 	}
 	mailFrom := rest[1:closingBracket]
 	rest = strings.TrimSpace(rest[closingBracket+1:])
@@ -512,7 +519,7 @@ func parseMailFrom(args string) (string, map[string]string) {
 			params[strings.ToUpper(k)] = v
 		}
 	}
-	return mailFrom, params
+	return mailFrom, params, nil
 }
 
 // parseRcptTo extracts the forward-path from a RCPT TO argument string.
