@@ -93,14 +93,20 @@ type Handler interface {
 // Logger is the logging interface used by the server.
 // A *slog.Logger satisfies this via the Slog adapter below.
 type Logger interface {
+	Debug(msg string, args ...any)
 	Info(msg string, args ...any)
 	Error(msg string, args ...any)
 }
 
 // SlogAdapter wraps a *slog.Logger to satisfy the Logger interface.
-// Info messages are logged at slog.LevelInfo; Error at slog.LevelError.
+// Debug → slog.LevelDebug, Info → slog.LevelInfo, Error → slog.LevelError.
 type SlogAdapter struct {
 	Logger *slog.Logger
+}
+
+// Debug logs at slog.LevelDebug.
+func (a *SlogAdapter) Debug(msg string, args ...any) {
+	a.Logger.Log(context.Background(), slog.LevelDebug, msg, args...)
 }
 
 // Info logs at slog.LevelInfo.
@@ -253,6 +259,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func (s *Server) logDebug(msg string, args ...any) {
+	if s.Logger != nil {
+		s.Logger.Debug(msg, args...)
 	}
 }
 
