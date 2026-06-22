@@ -127,12 +127,13 @@ func replay(addr, path string) error {
 }
 
 // formatSender returns the SMTP reverse-path for MAIL FROM.
-// An empty sender (null sender) becomes "<>".
+// Uses postcat.FormatNullSender to normalise the null-sender case.
 func formatSender(sender string) string {
-	if sender == "" || sender == "<>" {
+	s := postcat.FormatNullSender(sender)
+	if s == "<>" {
 		return "<>"
 	}
-	return "<" + sender + ">"
+	return "<" + s + ">"
 }
 
 // sendBody writes the raw message to conn with dot-stuffing and a

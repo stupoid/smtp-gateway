@@ -39,17 +39,27 @@ func Write(dir, mailFrom string, accepted []string, body []byte) (string, error)
 	w := bufio.NewWriter(f)
 
 	// Envelope records.
-	_, _ = fmt.Fprintf(w, "S %s\n", senderOrEmpty(mailFrom))
-	for _, rcpt := range accepted {
-		_, _ = fmt.Fprintf(w, "R %s\n", rcpt)
+	if _, err := fmt.Fprintf(w, "S %s\n", FormatNullSender(mailFrom)); err != nil {
+		return path, fmt.Errorf("write sender record: %w", err)
 	}
-	_, _ = fmt.Fprintf(w, "T %s\n", now.Format(time.RFC3339))
+	for _, rcpt := range accepted {
+		if _, err := fmt.Fprintf(w, "R %s\n", rcpt); err != nil {
+			return path, fmt.Errorf("write recipient record: %w", err)
+		}
+	}
+	if _, err := fmt.Fprintf(w, "T %s\n", now.Format(time.RFC3339)); err != nil {
+		return path, fmt.Errorf("write timestamp record: %w", err)
+	}
 
 	// Blank envelope separator.
-	_ = w.WriteByte('\n')
+	if err := w.WriteByte('\n'); err != nil {
+		return path, fmt.Errorf("write separator: %w", err)
+	}
 
 	// Raw message.
-	_, _ = w.Write(body)
+	if _, err := w.Write(body); err != nil {
+		return path, fmt.Errorf("write body: %w", err)
+	}
 
 	return path, w.Flush()
 }
@@ -105,8 +115,10 @@ func Parse(path string) (*Message, error) {
 	return m, nil
 }
 
-func senderOrEmpty(s string) string {
-	if s == "" {
+// FormatNullSender returns "<>" for an empty or null sender, or the sender
+// unchanged.  It normalises both "" and the literal "<>" to "<>".
+func FormatNullSender(s string) string {
+	if s == "" || s == "<>" {
 		return "<>"
 	}
 	return s
