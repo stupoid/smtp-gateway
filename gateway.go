@@ -207,7 +207,7 @@ func (s *Server) Serve(ln net.Listener) error {
 	if s.Hostname == "" {
 		s.Hostname = defaultHostname()
 	}
-	if s.MaxMessageSize > 0 && !s.noopLogger() {
+	if s.MaxMessageSize > 0 && s.Logger != nil {
 		s.logInfo("max_message_size", slog.Int("bytes", s.MaxMessageSize))
 	}
 
@@ -281,8 +281,6 @@ func (s *Server) logError(msg string, args ...any) {
 		s.Logger.Error(msg, args...)
 	}
 }
-
-func (s *Server) noopLogger() bool { return s.Logger == nil }
 
 func defaultHostname() string {
 	h, err := net.LookupAddr("127.0.0.1")

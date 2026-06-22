@@ -48,6 +48,16 @@ const (
 	phaseRcpt
 )
 
+// isAllowedDuringBdat returns true when the verb is permitted during a
+// BDAT chunk sequence.  Only BDAT itself, RSET, NOOP, and QUIT are allowed.
+func isAllowedDuringBdat(verb string) bool {
+	switch verb {
+	case "BDAT", "RSET", "NOOP", "QUIT":
+		return true
+	}
+	return false
+}
+
 // --- Connection handler ---
 
 func (s *Server) handleConn(netConn net.Conn) {
@@ -103,7 +113,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 			// During a BDAT chunk sequence, only BDAT, RSET, NOOP,
 			// and QUIT are allowed.  DATA/STARTTLS must signal
 			// resumeCh since the reader is paused waiting for them.
-			if inBdat && cmd.verb != "BDAT" && cmd.verb != "RSET" && cmd.verb != "NOOP" && cmd.verb != "QUIT" {
+			if inBdat && !isAllowedDuringBdat(cmd.verb) {
 				if cmd.verb == "DATA" || cmd.verb == "STARTTLS" {
 					resumeCh <- struct{}{}
 				}
@@ -111,24 +121,24 @@ func (s *Server) handleConn(netConn net.Conn) {
 			} else {
 				switch cmd.verb {
 				case "HELO":
-					resp, gotHelo = s.handleHelo(conn, cmd, tx, phase, gotHelo)
+					resp, gotHelo = s.handleHelo(conn, cmd, tx, gotHelo)
 					if gotHelo {
 						phase = phaseHelo
 					}
 				case "EHLO":
-					resp, gotHelo = s.handleEhlo(conn, cmd, tx, phase, gotHelo)
+					resp, gotHelo = s.handleEhlo(conn, cmd, tx, gotHelo)
 					if gotHelo {
 						phase = phaseHelo
 					}
 				case "STARTTLS":
 					resp, tlsReady = s.handleStartTLS(conn, tx, gotHelo, tlsReady, resumeCh)
 				case "MAIL":
-					resp = s.handleMail(conn, cmd, tx, phase, gotHelo, tlsReady)
+					resp = s.handleMail(cmd, tx, phase, gotHelo, tlsReady)
 					if resp.Code == 250 {
 						phase = phaseMail
 					}
 				case "RCPT":
-					resp = s.handleRcpt(conn, cmd, tx, &phase, gotHelo)
+					resp = s.handleRcpt(cmd, tx, &phase, gotHelo)
 					if phase < phaseRcpt && resp.Code == 250 {
 						phase = phaseRcpt
 					}
@@ -286,10 +296,8 @@ var ErrBadSyntax = errors.New("bad SMTP command syntax")
 // --- Command handlers ---
 
 func (s *Server) handleHelo(
-	_ *connState, cmd smtpCmd, tx *Tx,
-	phase int, gotHelo bool,
+	_ *connState, cmd smtpCmd, tx *Tx, gotHelo bool,
 ) (*Response, bool) {
-	_ = phase
 	if gotHelo {
 		return &Response{503, "5.5.1 HELO already received"}, gotHelo
 	}
@@ -308,10 +316,8 @@ func (s *Server) handleHelo(
 }
 
 func (s *Server) handleEhlo(
-	conn *connState, cmd smtpCmd, tx *Tx,
-	phase int, gotHelo bool,
+	conn *connState, cmd smtpCmd, tx *Tx, gotHelo bool,
 ) (*Response, bool) {
-	_ = phase
 	if gotHelo {
 		return &Response{503, "5.5.1 EHLO already received"}, gotHelo
 	}
@@ -359,32 +365,29 @@ func (s *Server) handleStartTLS(
 	gotHelo, tlsReady bool,
 	resumeCh chan<- struct{},
 ) (*Response, bool) {
+	// Signal resumeCh on every return — the reader goroutine is paused
+	// waiting for the TLS handshake to finish.
+	defer func() { resumeCh <- struct{}{} }()
+
 	if tlsReady {
-		resumeCh <- struct{}{}
 		return &Response{503, "5.5.1 STARTTLS already done"}, true
 	}
 	if !gotHelo {
-		resumeCh <- struct{}{}
 		return &Response{503, "5.5.1 EHLO required first"}, false
 	}
 	if s.TLSConfig == nil {
-		resumeCh <- struct{}{}
 		return &Response{502, "5.5.1 STARTTLS not supported"}, false
 	}
 	conn.write("220 2.0.0 Ready to start TLS\r\n", s.WriteTimeout)
 
 	tlsConn := tls.Server(conn.netConn, s.TLSConfig.Clone())
 	if err := tlsConn.Handshake(); err != nil {
-		resumeCh <- struct{}{}
 		s.logError("tls_handshake_error", slog.String("error", err.Error()))
 		return &Response{454, "4.7.0 TLS handshake failed"}, false
 	}
 	conn.netConn = tlsConn
 	conn.r = bufio.NewReader(tlsConn)
 	conn.w = bufio.NewWriter(tlsConn)
-
-	// Signal the reader goroutine to resume on the new TLS connection.
-	resumeCh <- struct{}{}
 
 	cs := tlsConn.ConnectionState()
 	tx.TLS = &cs
@@ -393,7 +396,7 @@ func (s *Server) handleStartTLS(
 }
 
 func (s *Server) handleMail(
-	_ *connState, cmd smtpCmd, tx *Tx,
+	cmd smtpCmd, tx *Tx,
 	phase int, gotHelo, tlsReady bool,
 ) *Response {
 	if s.TLSConfig != nil && !tlsReady {
@@ -431,7 +434,7 @@ func (s *Server) handleMail(
 }
 
 func (s *Server) handleRcpt(
-	_ *connState, cmd smtpCmd, tx *Tx,
+	cmd smtpCmd, tx *Tx,
 	phase *int, gotHelo bool,
 ) *Response {
 	if !gotHelo {
@@ -468,13 +471,14 @@ func (s *Server) handleData(
 	conn *connState, _ smtpCmd, tx *Tx,
 	phase int, resumeCh chan<- struct{},
 ) *Response {
+	// Signal resumeCh on every return — the reader goroutine is paused
+	// waiting for DATA body reading to finish.
+	defer func() { resumeCh <- struct{}{} }()
+
 	if phase < phaseRcpt {
-		resumeCh <- struct{}{}
 		return &Response{503, "5.5.1 RCPT required first"}
 	}
 	if len(tx.Accepted) == 0 {
-		// No accepted recipients — skip the handler entirely.
-		resumeCh <- struct{}{}
 		return &Response{554, "5.5.1 No valid recipients"}
 	}
 
@@ -486,7 +490,6 @@ func (s *Server) handleData(
 		conn, s.ReadTimeout,
 	)
 	if err != nil {
-		resumeCh <- struct{}{}
 		if errors.Is(err, ErrMessageTooLarge) {
 			return RespMessageSize
 		}
@@ -498,16 +501,12 @@ func (s *Server) handleData(
 	// client declared BODY=8BITMIME or SMTPUTF8 (RFC 6531 §3.4).
 	_, smtputf8 := tx.Params["SMTPUTF8"]
 	if !strings.EqualFold(tx.Params["BODY"], "8BITMIME") && !smtputf8 && contains8Bit(body) {
-		resumeCh <- struct{}{}
 		s.logInfo("8bit_rejected",
 			slog.String("mail_from", tx.MailFrom),
 			slog.Int("bytes", len(body)),
 		)
 		return RespEightBit
 	}
-
-	// Signal the reader goroutine to resume.
-	resumeCh <- struct{}{}
 
 	s.logInfo("data_received",
 		slog.Int("bytes", len(body)),
@@ -571,22 +570,22 @@ func (s *Server) handleBdat(
 	conn *connState, cmd smtpCmd, tx *Tx,
 	phase int, inBdat *bool, resumeCh chan<- struct{},
 ) *Response {
-	// Every return path must signal resumeCh — the reader is paused.
+	// Signal resumeCh on every return — the reader goroutine is paused
+	// waiting for BDAT processing to finish.
+	defer func() { resumeCh <- struct{}{} }()
+
 	if phase < phaseRcpt {
 		*inBdat = false
-		resumeCh <- struct{}{}
 		return &Response{503, "5.5.1 RCPT required first"}
 	}
 	if len(tx.Accepted) == 0 {
 		*inBdat = false
-		resumeCh <- struct{}{}
 		return &Response{554, "5.5.1 No valid recipients"}
 	}
 
 	size, last, err := parseBdatArgs(cmd.args)
 	if err != nil {
 		*inBdat = false
-		resumeCh <- struct{}{}
 		return &Response{501, "5.5.4 Bad BDAT syntax"}
 	}
 
@@ -597,12 +596,10 @@ func (s *Server) handleBdat(
 			if _, err := readNBytes(conn.r, size, conn, s.ReadTimeout); err != nil {
 				s.logError("bdat_read_error", slog.String("error", err.Error()))
 				*inBdat = false
-				resumeCh <- struct{}{}
 				return &Response{451, "4.3.0 Error reading chunk"}
 			}
 		}
 		*inBdat = false
-		resumeCh <- struct{}{}
 		return RespMessageSize
 	}
 
@@ -611,7 +608,6 @@ func (s *Server) handleBdat(
 	if err != nil {
 		s.logError("bdat_read_error", slog.String("error", err.Error()))
 		*inBdat = false
-		resumeCh <- struct{}{}
 		return &Response{451, "4.3.0 Error reading chunk"}
 	}
 
@@ -620,14 +616,12 @@ func (s *Server) handleBdat(
 	if !last {
 		// Intermediate chunk — stay in BDAT mode.
 		*inBdat = true
-		resumeCh <- struct{}{}
 		return &Response{250, "2.0.0 OK"}
 	}
 
 	// LAST chunk — message complete.  RFC 3030 Section 3: CHUNKING implies
 	// BINARYMIME, so no 8BITMIME check needed (unlike DATA).
 	*inBdat = false
-	resumeCh <- struct{}{}
 
 	s.logInfo("bdat_received",
 		slog.Int("bytes", len(tx.BodyBuf)),
@@ -780,6 +774,5 @@ func (s *Server) newTx(conn net.Conn) *Tx {
 	return &Tx{
 		RemoteAddr: conn.RemoteAddr(),
 		Hostname:   s.Hostname,
-		Params:     map[string]string{},
 	}
 }
