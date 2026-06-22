@@ -21,3 +21,4 @@ go.work.sum
 /postcat-replay
 /postcat
 _debug/
+/examples/s3/s3
