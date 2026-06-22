@@ -8,43 +8,38 @@ Kafka, the local filesystem, `/dev/null`, or anywhere else.
 
 ## Architecture
 
-```
-                          ┌─────────────────────────────────┐
-                          │        Server.Serve(ln)          │
-                          │    accept loop + conn limit      │
-                          └─────────────┬───────────────────┘
-                                        │ net.Conn per client
-                          ┌─────────────▼───────────────────┐
-                          │         handleConn(conn)         │
-                          │  ┌─────────────────────────────┐ │
-                          │  │     readCommands goroutine   │ │
-                          │  │  read line → parse → events  │ │
-                          │  │       chan (buffer 32)       │ │
-                          │  └──────────┬──────────────────┘ │
-                          │             │ smtpCmd{verb, args} │
-                          │  ┌──────────▼──────────────────┐ │
-                          │  │       worker loop            │ │
-                          │  │  select {                    │ │
-                          │  │    case cmd ← events:        │ │
-                          │  │      HELO → handleHelo()     │ │
-                          │  │      EHLO → handleEhlo()     │ │
-                          │  │      MAIL → handleMail()     │ │
-                          │  │      RCPT → handleRcpt()     │ │   ┌──────────────┐
-                          │  │      DATA → handleData() ────┼─┼───┤  Handler      │
-                          │  │      RSET → reset tx         │ │   │  (your code)  │
-                          │  │      QUIT → goodbye          │ │   └──────────────┘
-                          │  │    case ←ctx.Done():         │ │
-                          │  │      shutdown (421)          │ │
-                          │  │  }                           │ │
-                          │  └──────────────────────────────┘ │
-                          └───────────────────────────────────┘
+```mermaid
+flowchart TD
+    L["net.Listener"] -->|accept| S["Server.Serve(ln)\naccept loop + conn limit"]
+    S -->|net.Conn per client| HC["handleConn(conn)"]
+
+    HC --> RG["readCommands goroutine\nread line → parse → events chan"]
+    RG -->|"smtpCmd{verb, args}"| EV["events chan\n(buffer 32)"]
+    EV --> WL["worker loop\n(select)"]
+
+    WL -->|"HELO/EHLO"| HH["handleHelo / handleEhlo"]
+    WL -->|"MAIL"| HM["handleMail"]
+    WL -->|"RCPT"| HR["handleRcpt"]
+    WL -->|"DATA"| HD["handleData"]
+    WL -->|STARTTLS| HS["handleStartTLS"]
+    WL -->|"RSET"| HRT["reset tx"]
+    WL -->|QUIT| HQ["221 Bye"]
+    WL -->|"ctx.Done()"| HSD["421 shutdown"]
+
+    HD --> HND["Handler\n(your code)"]
+    HH --> HND
+    HM --> HND
+    HR --> HND
+
+    HS -->|"TLS upgrade\npause reader"| RG
+    HD -->|"body read\npause reader"| RG
 ```
 
-**Data flow:** The reader goroutine reads SMTP commands into a buffered channel
+**Data flow:** A reader goroutine scans SMTP commands into a buffered channel
 (32 deep) while the worker processes them sequentially. This enables RFC 2920
 PIPELINING — clients can send multiple commands without waiting for responses.
-During DATA, the reader pauses while the worker reads the dot-stuffed body
-directly from the connection, then signals the reader to resume.
+During DATA and STARTTLS, the reader pauses so the worker can take over the
+connection (body read or TLS handshake), then signals the reader to resume.
 
 **Concurrency:** Each connection gets one goroutine. A semaphore caps
 concurrent connections. Per-phase callbacks are serialized per connection
