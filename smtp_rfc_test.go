@@ -174,9 +174,33 @@ func TestSMTPBodyPreserveNewlines(t *testing.T) {
 }
 
 // TestSMTPBodyDotUnstuffing verifies that leading dots are properly
-// unstuffed during DATA reading.
+// unstuffed during DATA reading (unit-tested in TestReadDotUnstuffed_DotStuffing).
+// This E2E test confirms the full server pipeline handles dot-stuffed input and
+// that the handler receives correctly unstuffed body content.
 func TestSMTPBodyDotUnstuffing(t *testing.T) {
-	conn, scanner := dialServer(t)
+	// Use a recorder handler to verify the body is unstuffed.
+	h := &dotUnstuffRecorder{}
+	srv := &Server{
+		Hostname:    "test.local",
+		Handler:     h,
+		ReadTimeout: 5 * time.Second,
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+
+	conn, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	scanner := bufio.NewScanner(conn)
+	if !scanner.Scan() {
+		t.Fatalf("no banner: %v", scanner.Err())
+	}
 
 	sendAndExpect(t, conn, scanner, "EHLO t\r\n", "250")
 	_ = readMultiline(t, scanner)
@@ -184,12 +208,37 @@ func TestSMTPBodyDotUnstuffing(t *testing.T) {
 	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
 	sendAndExpect(t, conn, scanner, "DATA\r\n", "354")
 
-	// Send a body with dot-stuffed lines.
-	write(t, conn, "Leading dot: ..dot-stuffed\r\n")
-	write(t, conn, "Multiple dots: ...triple\r\n")
+	// SMTP dot-stuffing only applies to lines that START with a dot.
+	// Wire:  ".." → unstuffed: "."   (leading dot stripped)
+	// Wire:  "..." → unstuffed: ".." (one leading dot stripped)
+	write(t, conn, "..dot-stuffed line\r\n")
+	write(t, conn, "...double leading dot\r\n")
+	write(t, conn, "normal line\r\n")
 	write(t, conn, "\r\n.\r\n")
 	expectResp(t, scanner, "250")
+
+	// Verify dot-unstuffing: leading dots on lines should be stripped.
+	if !bytes.Contains(h.body, []byte(".dot-stuffed line")) {
+		t.Errorf("dot-unstuffing failed: expected '.dot-stuffed line', got body: %q", string(h.body))
+	}
+	if !bytes.Contains(h.body, []byte("..double leading dot")) {
+		t.Errorf("dot-unstuffing failed: expected '..double leading dot', got body: %q", string(h.body))
+	}
+
 	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
+// dotUnstuffRecorder captures the body for dot-unstuffing verification.
+type dotUnstuffRecorder struct {
+	body []byte
+}
+
+func (h *dotUnstuffRecorder) Hello(_ context.Context, _ *Tx) *Response    { return RespHelloOK }
+func (h *dotUnstuffRecorder) MailFrom(_ context.Context, _ *Tx) *Response { return RespMailOK }
+func (h *dotUnstuffRecorder) RcptTo(_ context.Context, _ *Tx) *Response   { return RespRcptOK }
+func (h *dotUnstuffRecorder) Data(_ context.Context, _ *Tx, body []byte) *Response {
+	h.body = append([]byte{}, body...)
+	return RespDataOK
 }
 
 // ---------------------------------------------------------------------------
@@ -497,27 +546,6 @@ func TestParseRcptToEdgeCases(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Message size limit
 // ---------------------------------------------------------------------------
-
-func TestSMTPMessageSizeLimit(t *testing.T) {
-	conn, scanner := dialServer(t)
-
-	sendAndExpect(t, conn, scanner, "EHLO mx\r\n", "250")
-	_ = readMultiline(t, scanner)
-	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
-	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
-
-	// Build a body larger than 5 bytes (readDotUnstuffed MaxSize test
-	// already exercises the internal limit).  This E2E test exercises the
-	// server's MaxMessageSize config.
-	// (The default test server has MaxMessageSize=0 → unlimited.
-	//  We exercise the limit via the earlier unit test.)
-	//
-	// Just verify normal delivery works.
-	sendAndExpect(t, conn, scanner, "DATA\r\n", "354")
-	write(t, conn, "ok\r\n.\r\n")
-	expectResp(t, scanner, "250")
-	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
-}
 
 // TestSMTPMessageSizeLimitEnforced tests a server configured with
 // MaxMessageSize — messages exceeding the limit are rejected with 552.
@@ -1003,9 +1031,9 @@ type utf8Handler struct {
 	lastSender string
 }
 
-func (h *utf8Handler) Hello(_ context.Context, _ *Tx) *Response          { return RespHelloOK }
-func (h *utf8Handler) MailFrom(_ context.Context, tx *Tx) *Response      { return RespMailOK }
-func (h *utf8Handler) RcptTo(_ context.Context, _ *Tx) *Response         { return RespRcptOK }
+func (h *utf8Handler) Hello(_ context.Context, _ *Tx) *Response    { return RespHelloOK }
+func (h *utf8Handler) MailFrom(_ context.Context, _ *Tx) *Response { return RespMailOK }
+func (h *utf8Handler) RcptTo(_ context.Context, _ *Tx) *Response   { return RespRcptOK }
 func (h *utf8Handler) Data(_ context.Context, tx *Tx, body []byte) *Response {
 	h.mu.Lock()
 	h.lastBody = append([]byte{}, body...)

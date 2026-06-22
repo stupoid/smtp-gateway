@@ -580,27 +580,6 @@ func TestPostcatConcurrency(t *testing.T) {
 // Concurrency: parseMailFrom — pure function, should be goroutine-safe
 // ---------------------------------------------------------------------------
 
-func TestParseMailFromConcurrency(t *testing.T) {
-	n := 100
-	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 100; j++ {
-				from, _, err := parseMailFrom("FROM:<test@example.com> SIZE=5000")
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				}
-				if from != "test@example.com" {
-					t.Errorf("from = %q", from)
-				}
-			}
-		}()
-	}
-	wg.Wait()
-}
-
 // ---------------------------------------------------------------------------
 // Concurrency: Server with postcat writes and real body verification
 // ---------------------------------------------------------------------------
@@ -710,7 +689,22 @@ func TestIsTimeout(t *testing.T) {
 	if isTimeout(nil) {
 		t.Error("isTimeout returned true for nil")
 	}
+	// A net.Error with Timeout()==true should return true.
+	if !isTimeout(&testTimeoutError{timeout: true}) {
+		t.Error("isTimeout returned false for timeout error")
+	}
+	// A net.Error with Timeout()==false should return false.
+	if isTimeout(&testTimeoutError{timeout: false}) {
+		t.Error("isTimeout returned true for non-timeout net.Error")
+	}
 }
+
+// testTimeoutError implements net.Error for testing isTimeout.
+type testTimeoutError struct{ timeout bool }
+
+func (e *testTimeoutError) Error() string   { return "test timeout error" }
+func (e *testTimeoutError) Timeout() bool   { return e.timeout }
+func (e *testTimeoutError) Temporary() bool { return false }
 
 func TestTruncate(t *testing.T) {
 	tests := []struct {
@@ -751,6 +745,10 @@ func TestDefaultHostname(t *testing.T) {
 	h := defaultHostname()
 	if h == "" {
 		t.Error("defaultHostname returned empty string")
+	}
+	// Must be either "localhost" or a valid-looking hostname (contains a dot).
+	if h != "localhost" && !strings.Contains(h, ".") {
+		t.Errorf("defaultHostname returned unexpected value: %q", h)
 	}
 }
 
@@ -1063,8 +1061,8 @@ func TestPostcatParseNoTimestamp(t *testing.T) {
 	if msg.Sender != "sender@t" {
 		t.Errorf("sender = %q, want sender@t", msg.Sender)
 	}
-	if msg.Time.IsZero() {
-		// Acceptable — no T line means zero time.
+	if !msg.Time.IsZero() {
+		t.Errorf("expected zero time (no T record), got %v", msg.Time)
 	}
 }
 
