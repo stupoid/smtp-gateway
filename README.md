@@ -6,10 +6,72 @@ The server calls your handler at each SMTP transaction phase — HELO, MAIL
 FROM, RCPT TO, DATA — so you can accept, reject, or redirect messages to S3,
 Kafka, the local filesystem, `/dev/null`, or anywhere else.
 
+## Architecture
+
+```
+                          ┌─────────────────────────────────┐
+                          │        Server.Serve(ln)          │
+                          │    accept loop + conn limit      │
+                          └─────────────┬───────────────────┘
+                                        │ net.Conn per client
+                          ┌─────────────▼───────────────────┐
+                          │         handleConn(conn)         │
+                          │  ┌─────────────────────────────┐ │
+                          │  │     readCommands goroutine   │ │
+                          │  │  read line → parse → events  │ │
+                          │  │       chan (buffer 32)       │ │
+                          │  └──────────┬──────────────────┘ │
+                          │             │ smtpCmd{verb, args} │
+                          │  ┌──────────▼──────────────────┐ │
+                          │  │       worker loop            │ │
+                          │  │  select {                    │ │
+                          │  │    case cmd ← events:        │ │
+                          │  │      HELO → handleHelo()     │ │
+                          │  │      EHLO → handleEhlo()     │ │
+                          │  │      MAIL → handleMail()     │ │
+                          │  │      RCPT → handleRcpt()     │ │   ┌──────────────┐
+                          │  │      DATA → handleData() ────┼─┼───┤  Handler      │
+                          │  │      RSET → reset tx         │ │   │  (your code)  │
+                          │  │      QUIT → goodbye          │ │   └──────────────┘
+                          │  │    case ←ctx.Done():         │ │
+                          │  │      shutdown (421)          │ │
+                          │  │  }                           │ │
+                          │  └──────────────────────────────┘ │
+                          └───────────────────────────────────┘
+```
+
+**Data flow:** The reader goroutine reads SMTP commands into a buffered channel
+(32 deep) while the worker processes them sequentially. This enables RFC 2920
+PIPELINING — clients can send multiple commands without waiting for responses.
+During DATA, the reader pauses while the worker reads the dot-stuffed body
+directly from the connection, then signals the reader to resume.
+
+**Concurrency:** Each connection gets one goroutine. A semaphore caps
+concurrent connections. Per-phase callbacks are serialized per connection
+but the same Handler instance handles all connections concurrently.
+
+### Customising behaviour
+
+| What you want | How to do it |
+|---|---|
+| Reject at HELO (auth, blocklist) | Return non-250 from `Handler.Hello` |
+| Reject sender | Return non-250 from `Handler.MailFrom` |
+| Accept/reject individual recipients | Return 250/non-250 from `Handler.RcptTo` |
+| Store/reject message body | `Handler.Data` gets the raw RFC 5322 bytes |
+| Enable STARTTLS | Set `Server.TLSConfig` |
+| Enable SMTPS (implicit TLS on connect) | Pass a `tls.Listener` to `Serve` |
+| Limit message size | Set `Server.MaxMessageSize` |
+| Limit recipients per message | Set `Server.MaxRecipients` |
+| Limit concurrent connections | Set `Server.MaxConnections` |
+| Quiet operation | Set `Server.Logger = nil` |
+| Structured JSON logging | `Server.Logger = smtpgateway.Slog(slog.New(slog.NewJSONHandler(...)))` |
+| Capture raw mail to disk | Set `Server.PostcatDir` |
+| Disable PIPELINING | Not yet configurable (always on) |
+
 ## Features
 
 - **PIPELINING** — full RFC 2920 support with backpressure
-- **STARTTLS** — bring your own `tls.Config`
+- **STARTTLS** — bring your own `tls.Config`; also supports SMTPS via `tls.Listener`
 - **Per-phase hooks** — inspect and reject at HELO, MAIL FROM, RCPT TO, DATA
 - **Partial failure** — accept some recipients, reject others
 - **Raw body** — receive the complete RFC 5322 message (headers + body) at DATA
@@ -117,6 +179,14 @@ ln, _ := net.Listen("tcp", ":587")
 srv.Serve(ln)
 ```
 
+For implicit TLS (SMTPS, port 465), wrap the listener yourself:
+
+```go
+ln, _ := net.Listen("tcp", ":465")
+tlsLn := tls.NewListener(ln, tlsConfig)
+srv.Serve(tlsLn)
+```
+
 ## Postcat sink
 
 The `PostcatDir` option writes each accepted message as a flat file in
@@ -205,11 +275,12 @@ needs mutable state.
 |---------|--------|
 | EHLO / HELO | ✅ |
 | PIPELINING (RFC 2920) | ✅ |
-| STARTTLS | ✅ |
+| STARTTLS (RFC 3207) | ✅ |
+| SMTPS (implicit TLS, port 465) | ✅ via `tls.Listener` |
 | 8BITMIME | ✅ with enforcement (rejects 8-bit data without BODY=8BITMIME) |
 | ENHANCEDSTATUSCODES | ✅ |
 | SMTPUTF8 | Advertised |
-| SIZE | ✅ |
+| SIZE | ✅ (when `MaxMessageSize > 0`) |
 | Graceful shutdown | ✅ |
 | CHUNKING / BDAT (RFC 3030) | Planned |
 | SMTP AUTH | Not yet |
@@ -230,8 +301,9 @@ type Logger interface {
 }
 ```
 
-The `args` variadic is modelled on `slog` key=value pairs — each pair
-is a `slog.Attr`.  Use `slog.String`, `slog.Int`, `slog.Duration`, etc.
+The `args` variadic follows `slog` conventions — pass key=value pairs
+using `slog.String`, `slog.Int`, `slog.Duration`, etc.  The built-in
+`SlogAdapter` passes them straight through to the underlying `*slog.Logger`.
 
 ### Built-in adapter
 
@@ -255,7 +327,7 @@ srv.Logger = smtpgateway.Slog(slog.New(slog.NewTextHandler(f, nil)))
 
 ### Custom logger
 
-Implement the two-method interface to send events to any sink:
+Implement the three-method `Logger` interface to send events to any sink:
 
 ```go
 type syslogLogger struct{}
@@ -271,8 +343,8 @@ srv.Logger = &syslogLogger{}
 
 | Event | Level | Attrs |
 |-------|-------|-------|
-| `connection_opened` | Info | `remote` |
-| `connection_closed` | Info | `remote` |
+| `connection_opened` | Debug | `remote` |
+| `connection_closed` | Debug | `remote` |
 | `smtp_recv` | Info | `verb`, `args` (truncated) |
 | `data_received` | Info | `bytes`, `mail_from`, `recipients` |
 | `read_error` | Error | `error` |
