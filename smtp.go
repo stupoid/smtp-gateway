@@ -81,7 +81,10 @@ func (s *Server) handleConn(netConn net.Conn) {
 	}
 
 	// Send banner.
-	conn.write(fmt.Sprintf("220 %s ESMTP\r\n", s.Hostname), s.WriteTimeout)
+	if err := conn.write(fmt.Sprintf("220 %s ESMTP\r\n", s.Hostname), s.WriteTimeout); err != nil {
+		s.logError("banner_write_error", slog.String("error", err.Error()))
+		return
+	}
 
 	tx := s.newTx(netConn)
 
@@ -94,12 +97,10 @@ func (s *Server) handleConn(netConn net.Conn) {
 		// Pipelining: reader sends commands to a channel.
 		events   = make(chan smtpCmd, 32)
 		resumeCh = make(chan struct{}, 1)
-
-		readerDone = make(chan struct{})
 	)
 
 	// Start the SMTP command reader goroutine.
-	go s.readCommands(s.ctx, conn, events, resumeCh, readerDone)
+	go s.readCommands(s.ctx, conn, events, resumeCh)
 
 	// Worker loop: process commands sequentially.
 	for {
@@ -165,7 +166,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 				case "VRFY", "EXPN":
 					resp = RespVrfyDisabled
 				case "QUIT":
-					conn.write(RespGoodbye.String(), s.WriteTimeout)
+					_ = conn.write(RespGoodbye.String(), s.WriteTimeout)
 					return
 				default:
 					resp = &Response{500, "5.5.1 Command not recognized"}
@@ -173,12 +174,15 @@ func (s *Server) handleConn(netConn net.Conn) {
 			}
 
 			if resp != nil {
-				conn.write(resp.String(), s.WriteTimeout)
+				if err := conn.write(resp.String(), s.WriteTimeout); err != nil {
+					s.logError("write_error", slog.String("error", err.Error()))
+					return
+				}
 			}
 
 		case <-s.ctx.Done():
 			// Server is shutting down; send 421 and close.
-			conn.write("421 4.3.0 Service shutting down\r\n", s.WriteTimeout)
+			_ = conn.write("421 4.3.0 Service shutting down\r\n", s.WriteTimeout)
 			return
 		}
 	}
@@ -192,10 +196,8 @@ func (s *Server) readCommands(
 	conn *connState,
 	events chan<- smtpCmd,
 	resumeCh <-chan struct{},
-	done chan<- struct{},
 ) {
 	defer func() {
-		close(done)
 		close(events)
 	}()
 
@@ -257,8 +259,9 @@ func (s *Server) readCommands(
 
 // readDotUnstuffed reads a dot-stuffed body from r until the
 // terminator "\r\n.\r\n".  Returns the unstuffed bytes (raw RFC 5322
-// message).  Respects maxSize (0 = unlimited).  On overflow, returns
-// an error and the bytes read so far.
+// message).  Respects maxSize (0 = unlimited).  On overflow, drains
+// the remaining body lines and returns ErrMessageTooLarge so the
+// protocol stream stays synchronized.
 func readDotUnstuffed(r *bufio.Reader, maxSize int, conn *connState, readTimeout time.Duration) ([]byte, error) {
 	var buf []byte
 	if maxSize > 0 {
@@ -279,7 +282,19 @@ func readDotUnstuffed(r *bufio.Reader, maxSize int, conn *connState, readTimeout
 			line = line[1:]
 		}
 		if maxSize > 0 && len(buf)+len(line)+2 > maxSize {
-			return buf, ErrMessageTooLarge
+			// Drain remaining body lines so the protocol stream stays
+			// synchronized.  If a read error occurs during drain
+			// (the client is likely waiting for the 552 response),
+			// return immediately — the overflow was already detected.
+			for {
+				drainLine, drainErr := readLine(r, readTimeout, conn)
+				if drainErr != nil {
+					return buf, ErrMessageTooLarge
+				}
+				if drainLine == "." {
+					return buf, ErrMessageTooLarge
+				}
+			}
 		}
 		buf = append(buf, line...)
 		buf = append(buf, '\r', '\n')
@@ -305,7 +320,7 @@ func (s *Server) handleHelo(
 	if tx.Helo == "" {
 		return &Response{501, "5.5.2 HELO requires domain"}, false
 	}
-	resp := s.Handler.Hello(context.Background(), tx)
+	resp := s.Handler.Hello(s.ctx, tx)
 	if resp == nil || resp.Code != 250 {
 		if resp == nil {
 			resp = RespBadSeq
@@ -325,7 +340,7 @@ func (s *Server) handleEhlo(
 	if tx.Helo == "" {
 		return &Response{501, "5.5.2 EHLO requires domain"}, false
 	}
-	resp := s.Handler.Hello(context.Background(), tx)
+	resp := s.Handler.Hello(s.ctx, tx)
 	if resp == nil || resp.Code != 250 {
 		if resp == nil {
 			resp = RespBadSeq
@@ -347,13 +362,18 @@ func (s *Server) handleEhlo(
 		ext = append(ext, fmt.Sprintf("SIZE %d", s.MaxMessageSize))
 	}
 	if len(ext) == 1 {
-		conn.write(fmt.Sprintf("250 %s\r\n", ext[0]), s.WriteTimeout)
+		_ = conn.write(fmt.Sprintf("250 %s\r\n", ext[0]), s.WriteTimeout)
 	} else {
 		for i, line := range ext {
+			var err error
 			if i == len(ext)-1 {
-				conn.write(fmt.Sprintf("250 %s\r\n", line), s.WriteTimeout)
+				err = conn.write(fmt.Sprintf("250 %s\r\n", line), s.WriteTimeout)
 			} else {
-				conn.write(fmt.Sprintf("250-%s\r\n", line), s.WriteTimeout)
+				err = conn.write(fmt.Sprintf("250-%s\r\n", line), s.WriteTimeout)
+			}
+			if err != nil {
+				s.logError("ehlo_write_error", slog.String("error", err.Error()))
+				return nil, false
 			}
 		}
 	}
@@ -378,13 +398,24 @@ func (s *Server) handleStartTLS(
 	if s.TLSConfig == nil {
 		return &Response{502, "5.5.1 STARTTLS not supported"}, false
 	}
-	conn.write("220 2.0.0 Ready to start TLS\r\n", s.WriteTimeout)
+	if err := conn.write("220 2.0.0 Ready to start TLS\r\n", s.WriteTimeout); err != nil {
+		return &Response{454, "4.7.0 TLS handshake failed"}, false
+	}
 
+	// Apply a deadline to prevent a slow TLS handshake from blocking
+	// the worker goroutine indefinitely.
+	tlsTimeout := s.ReadTimeout
+	if tlsTimeout <= 0 {
+		tlsTimeout = 30 * time.Second
+	}
+	_ = conn.netConn.SetDeadline(time.Now().Add(tlsTimeout))
 	tlsConn := tls.Server(conn.netConn, s.TLSConfig.Clone())
 	if err := tlsConn.Handshake(); err != nil {
+		_ = conn.netConn.SetDeadline(time.Time{})
 		s.logError("tls_handshake_error", slog.String("error", err.Error()))
 		return &Response{454, "4.7.0 TLS handshake failed"}, false
 	}
+	_ = conn.netConn.SetDeadline(time.Time{})
 	conn.netConn = tlsConn
 	conn.r = bufio.NewReader(tlsConn)
 	conn.w = bufio.NewWriter(tlsConn)
@@ -419,17 +450,26 @@ func (s *Server) handleMail(
 	tx.Rcpts = nil
 	tx.Accepted = nil
 	tx.Rejected = nil
+	tx.BodyBuf = nil
 
 	if s.MaxMessageSize > 0 {
 		if sizeStr, ok := params["SIZE"]; ok {
-			if size, err := strconv.Atoi(sizeStr); err == nil && size > s.MaxMessageSize {
+			size, err := strconv.ParseInt(sizeStr, 10, 64)
+			if err != nil || size < 0 || size > int64(s.MaxMessageSize) {
+				if err != nil {
+					return &Response{501, "5.5.4 Bad SIZE parameter"}
+				}
 				return RespMessageSize
 			}
 		}
 	}
 	// MaxRecipients is enforced at the RCPT phase.
 
-	return s.Handler.MailFrom(context.Background(), tx)
+	resp := s.Handler.MailFrom(s.ctx, tx)
+	if resp == nil {
+		resp = RespBadSeq
+	}
+	return resp
 }
 
 func (s *Server) handleRcpt(
@@ -451,7 +491,7 @@ func (s *Server) handleRcpt(
 		return &Response{452, "4.5.3 Too many recipients"}
 	}
 
-	resp := s.Handler.RcptTo(context.Background(), tx)
+	resp := s.Handler.RcptTo(s.ctx, tx)
 	if resp != nil && resp.Code == 250 {
 		tx.Accepted = append(tx.Accepted, rcpt)
 	} else {
@@ -480,13 +520,17 @@ func (s *Server) handleData(
 	if len(tx.Accepted) == 0 {
 		return &Response{554, "5.5.1 No valid recipients"}
 	}
-
-	// Send 354 and read the body.
-	conn.write(RespStartMail.String(), s.WriteTimeout)
+	if err := conn.write(RespStartMail.String(), s.WriteTimeout); err != nil {
+		return &Response{451, "4.3.0 System error"}
+	}
+	bodyReadTimeout := s.ReadTimeout
+	if bodyReadTimeout <= 0 {
+		bodyReadTimeout = 5 * time.Minute
+	}
 
 	body, err := readDotUnstuffed(
 		conn.r, s.MaxMessageSize,
-		conn, s.ReadTimeout,
+		conn, bodyReadTimeout,
 	)
 	if err != nil {
 		if errors.Is(err, ErrMessageTooLarge) {
@@ -513,7 +557,10 @@ func (s *Server) handleData(
 		slog.Int("recipients", len(tx.Accepted)),
 	)
 
-	resp := s.Handler.Data(context.Background(), tx, body)
+	resp := s.Handler.Data(s.ctx, tx, body)
+	if resp == nil {
+		resp = RespBadSeq
+	}
 
 	// Write postcat file if configured and accepted.
 	if resp != nil && resp.Code == 250 && s.PostcatDir != "" {
@@ -573,40 +620,58 @@ func (s *Server) handleBdat(
 	// waiting for BDAT processing to finish.
 	defer func() { resumeCh <- struct{}{} }()
 
-	if phase < phaseRcpt {
-		*inBdat = false
-		return &Response{503, "5.5.1 RCPT required first"}
-	}
-	if len(tx.Accepted) == 0 {
-		*inBdat = false
-		return &Response{554, "5.5.1 No valid recipients"}
-	}
-
+	// Parse BDAT arguments BEFORE guard checks so we know how many
+	// bytes to discard on early rejection (keeps protocol synchronized).
 	size, last, err := parseBdatArgs(cmd.args)
 	if err != nil {
 		*inBdat = false
 		return &Response{501, "5.5.4 Bad BDAT syntax"}
 	}
 
-	// MaxMessageSize check before reading.
-	if s.MaxMessageSize > 0 && len(tx.BodyBuf)+size > s.MaxMessageSize {
-		// Read and discard chunk data to keep the protocol stream synchronized.
+	// Apply a read deadline for chunk reads so a slow client doesn't
+	// block the worker goroutine indefinitely.
+	bodyReadTimeout := s.ReadTimeout
+	if bodyReadTimeout <= 0 {
+		bodyReadTimeout = 5 * time.Minute
+	}
+
+	// discardChunk reads and discards `size` raw bytes from the connection
+	// to keep the protocol stream synchronized on rejection.
+	discardChunk := func() {
 		if size > 0 {
-			if _, err := readNBytes(conn.r, size, conn, s.ReadTimeout); err != nil {
-				s.logError("bdat_read_error", slog.String("error", err.Error()))
-				*inBdat = false
-				return &Response{451, "4.3.0 Error reading chunk"}
+			if _, discErr := readNBytes(conn.r, size, conn, bodyReadTimeout); discErr != nil {
+				s.logError("bdat_read_error", slog.String("error", discErr.Error()))
 			}
 		}
+	}
+
+	if phase < phaseRcpt {
+		discardChunk()
 		*inBdat = false
+		tx.BodyBuf = nil
+		return &Response{503, "5.5.1 RCPT required first"}
+	}
+	if len(tx.Accepted) == 0 {
+		discardChunk()
+		*inBdat = false
+		tx.BodyBuf = nil
+		return &Response{554, "5.5.1 No valid recipients"}
+	}
+
+	// MaxMessageSize check before reading.
+	if s.MaxMessageSize > 0 && len(tx.BodyBuf)+size > s.MaxMessageSize {
+		discardChunk()
+		*inBdat = false
+		tx.BodyBuf = nil
 		return RespMessageSize
 	}
 
 	// Read the chunk data.
-	chunk, err := readNBytes(conn.r, size, conn, s.ReadTimeout)
+	chunk, err := readNBytes(conn.r, size, conn, bodyReadTimeout)
 	if err != nil {
 		s.logError("bdat_read_error", slog.String("error", err.Error()))
 		*inBdat = false
+		tx.BodyBuf = nil
 		return &Response{451, "4.3.0 Error reading chunk"}
 	}
 
@@ -628,9 +693,12 @@ func (s *Server) handleBdat(
 		slog.Int("recipients", len(tx.Accepted)),
 	)
 
-	resp := s.Handler.Data(context.Background(), tx, tx.BodyBuf)
+	resp := s.Handler.Data(s.ctx, tx, tx.BodyBuf)
+	if resp == nil {
+		resp = RespBadSeq
+	}
 
-	if resp != nil && resp.Code == 250 && s.PostcatDir != "" {
+	if resp.Code == 250 && s.PostcatDir != "" {
 		if path, err := postcat.Write(s.PostcatDir, tx.MailFrom, tx.Accepted, tx.BodyBuf); err != nil {
 			s.logError("postcat_write_error",
 				slog.String("error", err.Error()),
@@ -714,17 +782,29 @@ func (c *connState) SetReadDeadline(t time.Time) {
 	_ = c.netConn.SetReadDeadline(t)
 }
 
-func (c *connState) write(s string, timeout time.Duration) {
+func (c *connState) write(s string, timeout time.Duration) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if timeout > 0 {
-		_ = c.netConn.SetWriteDeadline(time.Now().Add(timeout))
+		if err := c.netConn.SetWriteDeadline(time.Now().Add(timeout)); err != nil {
+			return err
+		}
 	}
-	_, _ = c.w.WriteString(s)
-	_ = c.w.Flush()
+	if _, err := c.w.WriteString(s); err != nil {
+		return err
+	}
+	if err := c.w.Flush(); err != nil {
+		// Flush failed — buffered data remains.  Reset the writer so
+		// the next write doesn't prepend stale data to a new response.
+		c.w.Reset(c.netConn)
+		return err
+	}
 	if timeout > 0 {
-		_ = c.netConn.SetWriteDeadline(time.Time{})
+		if err := c.netConn.SetWriteDeadline(time.Time{}); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func (c *connState) Close() error {
