@@ -61,58 +61,73 @@ func Write(dir, mailFrom string, accepted []string, body []byte) (string, error)
 		return path, fmt.Errorf("write body: %w", err)
 	}
 
-	return path, w.Flush()
+	if err := w.Flush(); err != nil {
+		// Remove the incomplete file so downstream consumers don't see
+		// a truncated artifact.
+		_ = f.Close()
+		_ = os.Remove(path)
+		return path, fmt.Errorf("flush postcat file: %w", err)
+	}
+	return path, nil
 }
 
 // Parse reads a postcat-format file from path and returns the parsed
 // message.  It reads envelope records (S, R, T lines) until a blank
 // line, then treats the remainder as the raw RFC 5322 message.
+//
+// The raw body is read verbatim (no reconstruction) so the original
+// content is preserved exactly — no spurious trailing CRLF is added.
 func Parse(path string) (*Message, error) {
-	f, err := os.Open(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("open postcat file: %w", err)
 	}
-	defer func() { _ = f.Close() }()
 
 	m := &Message{}
-	scanner := bufio.NewScanner(f)
-	inBody := false
-	var bodyLines []string
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !inBody {
-			if line == "" {
-				inBody = true
-				continue
+	// Find the blank line separator between envelope and body.
+	sepIdx := findBlankLine(raw)
+	if sepIdx < 0 {
+		// No blank line separator; the file has no body.
+		return m, nil
+	}
+
+	// Parse envelope records line by line.
+	envelope := string(raw[:sepIdx])
+	for _, line := range strings.Split(envelope, "\n") {
+		switch {
+		case strings.HasPrefix(line, "S "):
+			m.Sender = line[2:]
+		case strings.HasPrefix(line, "R "):
+			m.Recipients = append(m.Recipients, line[2:])
+		case strings.HasPrefix(line, "T "):
+			t, err := time.Parse(time.RFC3339, line[2:])
+			if err != nil {
+				return nil, fmt.Errorf("parse timestamp record: %w", err)
 			}
-			switch {
-			case strings.HasPrefix(line, "S "):
-				m.Sender = line[2:]
-			case strings.HasPrefix(line, "R "):
-				m.Recipients = append(m.Recipients, line[2:])
-			case strings.HasPrefix(line, "T "):
-				t, err := time.Parse(time.RFC3339, line[2:])
-				if err == nil {
-					m.Time = t
-				}
-			}
-		} else {
-			bodyLines = append(bodyLines, line)
+			m.Time = t
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read postcat file: %w", err)
-	}
 
-	// Reconstruct raw message with CRLF line endings.
-	raw := strings.Join(bodyLines, "\r\n")
-	if len(bodyLines) > 0 {
-		raw += "\r\n"
-	}
-	m.RawMessage = []byte(raw)
-
+	// Body is everything after the blank line separator.
+	m.RawMessage = raw[sepIdx+2:] // skip "\n\n"
 	return m, nil
+}
+
+// findBlankLine returns the byte index of "\n\n" in b, or -1 if not found.
+func findBlankLine(b []byte) int {
+	for i := 0; i < len(b)-1; i++ {
+		if b[i] == '\n' && b[i+1] == '\n' {
+			return i
+		}
+	}
+	// Also accept "\r\n\r\n" (CRLF blank line).
+	for i := 0; i < len(b)-3; i++ {
+		if b[i] == '\r' && b[i+1] == '\n' && b[i+2] == '\r' && b[i+3] == '\n' {
+			return i
+		}
+	}
+	return -1
 }
 
 // FormatNullSender returns "<>" for an empty or null sender, or the sender
