@@ -1376,6 +1376,26 @@ func TestSMTPBDATMessageSizeExceeded(t *testing.T) {
 	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
 }
 
+func TestSMTPBDATBadSyntaxClearsBuffer(t *testing.T) {
+	rec := &bdatRecorder{}
+	conn, scanner, _ := bdatServer(t, rec)
+	bdatSetup(t, conn, scanner)
+
+	// Accumulate a chunk, then send malformed BDAT, then a valid LAST.
+	// The handler must receive only the data from the LAST chunk.
+	sendBdat(t, conn, scanner, 5, false, "Stale")
+	sendAndExpect(t, conn, scanner, "BDAT BADARGS\r\n", "501")
+	sendBdat(t, conn, scanner, 4, true, "Real")
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+
+	rec.mu.Lock()
+	if string(rec.lastBody) != "Real" {
+		t.Errorf("body = %q, want %q (stale BDAT data leaked through parse error)", string(rec.lastBody), "Real")
+	}
+	rec.mu.Unlock()
+}
+
 func TestSMTPBDATRsetResets(t *testing.T) {
 	rec := &bdatRecorder{}
 	conn, scanner, _ := bdatServer(t, rec)

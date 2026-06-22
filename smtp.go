@@ -134,7 +134,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 				case "STARTTLS":
 					resp, tlsReady = s.handleStartTLS(conn, tx, gotHelo, tlsReady, resumeCh)
 				case "MAIL":
-					resp = s.handleMail(cmd, tx, phase, gotHelo, tlsReady)
+					resp = s.handleMail(conn, cmd, tx, phase, gotHelo, tlsReady)
 					if resp.Code == 250 {
 						phase = phaseMail
 					}
@@ -159,6 +159,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 				case "RSET":
 					resp = &Response{250, "2.0.0 OK"}
 					tx = s.newTx(netConn)
+					conn.bodyBuf = nil
 					phase = phaseInit
 					inBdat = false
 				case "NOOP":
@@ -427,7 +428,7 @@ func (s *Server) handleStartTLS(
 }
 
 func (s *Server) handleMail(
-	cmd smtpCmd, tx *Tx,
+	conn *connState, cmd smtpCmd, tx *Tx,
 	phase int, gotHelo, tlsReady bool,
 ) *Response {
 	if s.TLSConfig != nil && !tlsReady {
@@ -450,7 +451,7 @@ func (s *Server) handleMail(
 	tx.Rcpts = nil
 	tx.Accepted = nil
 	tx.Rejected = nil
-	tx.BodyBuf = nil
+	conn.bodyBuf = nil
 
 	if s.MaxMessageSize > 0 {
 		if sizeStr, ok := params["SIZE"]; ok {
@@ -625,6 +626,7 @@ func (s *Server) handleBdat(
 	size, last, err := parseBdatArgs(cmd.args)
 	if err != nil {
 		*inBdat = false
+		conn.bodyBuf = nil
 		return &Response{501, "5.5.4 Bad BDAT syntax"}
 	}
 
@@ -648,21 +650,21 @@ func (s *Server) handleBdat(
 	if phase < phaseRcpt {
 		discardChunk()
 		*inBdat = false
-		tx.BodyBuf = nil
+		conn.bodyBuf = nil
 		return &Response{503, "5.5.1 RCPT required first"}
 	}
 	if len(tx.Accepted) == 0 {
 		discardChunk()
 		*inBdat = false
-		tx.BodyBuf = nil
+		conn.bodyBuf = nil
 		return &Response{554, "5.5.1 No valid recipients"}
 	}
 
 	// MaxMessageSize check before reading.
-	if s.MaxMessageSize > 0 && len(tx.BodyBuf)+size > s.MaxMessageSize {
+	if s.MaxMessageSize > 0 && len(conn.bodyBuf)+size > s.MaxMessageSize {
 		discardChunk()
 		*inBdat = false
-		tx.BodyBuf = nil
+		conn.bodyBuf = nil
 		return RespMessageSize
 	}
 
@@ -671,11 +673,11 @@ func (s *Server) handleBdat(
 	if err != nil {
 		s.logError("bdat_read_error", slog.String("error", err.Error()))
 		*inBdat = false
-		tx.BodyBuf = nil
+		conn.bodyBuf = nil
 		return &Response{451, "4.3.0 Error reading chunk"}
 	}
 
-	tx.BodyBuf = append(tx.BodyBuf, chunk...)
+	conn.bodyBuf = append(conn.bodyBuf, chunk...)
 
 	if !last {
 		// Intermediate chunk — stay in BDAT mode.
@@ -688,18 +690,18 @@ func (s *Server) handleBdat(
 	*inBdat = false
 
 	s.logInfo("bdat_received",
-		slog.Int("bytes", len(tx.BodyBuf)),
+		slog.Int("bytes", len(conn.bodyBuf)),
 		slog.String("mail_from", tx.MailFrom),
 		slog.Int("recipients", len(tx.Accepted)),
 	)
 
-	resp := s.Handler.Data(s.ctx, tx, tx.BodyBuf)
+	resp := s.Handler.Data(s.ctx, tx, conn.bodyBuf)
 	if resp == nil {
 		resp = RespBadSeq
 	}
 
 	if resp.Code == 250 && s.PostcatDir != "" {
-		if path, err := postcat.Write(s.PostcatDir, tx.MailFrom, tx.Accepted, tx.BodyBuf); err != nil {
+		if path, err := postcat.Write(s.PostcatDir, tx.MailFrom, tx.Accepted, conn.bodyBuf); err != nil {
 			s.logError("postcat_write_error",
 				slog.String("error", err.Error()),
 				slog.String("path", path),
@@ -707,7 +709,7 @@ func (s *Server) handleBdat(
 		}
 	}
 
-	tx.BodyBuf = nil
+	conn.bodyBuf = nil
 	return resp
 }
 
@@ -776,6 +778,7 @@ type connState struct {
 	r       *bufio.Reader
 	w       *bufio.Writer
 	mu      sync.Mutex // guards writes
+	bodyBuf []byte     // BDAT chunk accumulation
 }
 
 func (c *connState) SetReadDeadline(t time.Time) {

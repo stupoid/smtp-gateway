@@ -265,9 +265,9 @@ Flags:
 - **MailFrom** — called after MAIL FROM. `tx.MailFrom` and `tx.Params` are populated.
 - **RcptTo** — called for each RCPT TO. Accept/reject individually.
   `tx.Rcpts` has all presented; `tx.Accepted` has the accepted subset.
-- **Data** — called with the raw RFC 5322 message. Also called for
-  BDAT/CHUNKING (RFC 3030) transactions where chunks are accumulated in
-  `tx.BodyBuf` and passed as `body`. Only called if ≥1 recipient was
+- **Data** — called with the raw RFC 5322 message body. Also called for
+  BDAT/CHUNKING (RFC 3030) where chunks are accumulated and passed as
+  `body` on the LAST chunk. Only called if ≥1 recipient was
   accepted. Return non-250 to bounce.
 
 Callbacks are **serialized per connection**. The same handler instance
@@ -288,10 +288,6 @@ needs mutable state.
   built once per connection, not lazily. Set `Server.TLSConfig` before
   calling `Serve`.
 
-- **Body vs BodyBuf.** For DATA transactions, the body is passed directly
-  to `Handler.Data`. For BDAT/CHUNKING, chunks accumulate in `tx.BodyBuf`
-  and are passed as `body` on the LAST chunk. In both cases your `Data`
-  handler receives the complete message.
 
 ## Protocol support
 

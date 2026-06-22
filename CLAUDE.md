@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Use Conventional Commits: `<type>(<scope>): <imperative summary>`. Atomic commits — one logical change per commit. Verify before committing: run tests, lint, and `git diff --check`.
 
+When a change alters runtime behaviour (new defaults, changed contracts, new/removed API surface, CLI flag changes), check that `README.md` reflects the current state. Stale pitfall entries, outdated examples, and missing configuration options should be caught before the commit lands.
+
 ## Commands
 
 ```bash

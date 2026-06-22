@@ -65,7 +65,6 @@ type Tx struct {
 	Rcpts      []string
 	Accepted   []string
 	Rejected   []Rejection
-	BodyBuf    []byte // accumulated BDAT chunk data (cleared on RSET/DATA reset)
 }
 
 // Handler receives callbacks at each phase of an SMTP transaction.
