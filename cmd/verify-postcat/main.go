@@ -10,6 +10,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintf(os.Stderr, "usage: verify-postcat <directory>\n")
+		os.Exit(1)
+	}
 	entries, err := os.ReadDir(os.Args[1])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "readdir: %v\n", err)
