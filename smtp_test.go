@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -655,6 +656,296 @@ func TestServerWithBodyVerification(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Helper function unit tests
+// ---------------------------------------------------------------------------
+
+func TestIsTimeout(t *testing.T) {
+	// A non-timeout error should return false.
+	if isTimeout(errors.New("not a timeout")) {
+		t.Error("isTimeout returned true for plain error")
+	}
+	if isTimeout(nil) {
+		t.Error("isTimeout returned true for nil")
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	tests := []struct {
+		s    string
+		n    int
+		want string
+	}{
+		{"short", 10, "short"},
+		{"longer string", 6, "longer..."},
+		{"exact", 5, "exact"},
+		{"", 5, ""},
+		{"hello", 5, "hello"}, // exactly at limit
+	}
+	for _, tc := range tests {
+		got := truncate(tc.s, tc.n)
+		if got != tc.want {
+			t.Errorf("truncate(%q, %d) = %q, want %q", tc.s, tc.n, got, tc.want)
+		}
+	}
+}
+
+func TestContains8Bit(t *testing.T) {
+	if contains8Bit([]byte("pure ascii")) {
+		t.Error("contains8Bit returned true for 7-bit ASCII")
+	}
+	if contains8Bit([]byte{}) {
+		t.Error("contains8Bit returned true for empty slice")
+	}
+	if !contains8Bit([]byte{0x80}) {
+		t.Error("contains8Bit returned false for byte 0x80")
+	}
+	if !contains8Bit([]byte("hello\xFF")) {
+		t.Error("contains8Bit returned false for byte 0xFF")
+	}
+}
+
+func TestDefaultHostname(t *testing.T) {
+	h := defaultHostname()
+	if h == "" {
+		t.Error("defaultHostname returned empty string")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Handler rejection tests
+// ---------------------------------------------------------------------------
+
+type rejectHeloHandler struct{}
+
+func (h *rejectHeloHandler) Hello(_ context.Context, _ *Tx) *Response {
+	return &Response{550, "5.7.1 HELO rejected"}
+}
+func (h *rejectHeloHandler) MailFrom(_ context.Context, _ *Tx) *Response { return RespMailOK }
+func (h *rejectHeloHandler) RcptTo(_ context.Context, _ *Tx) *Response   { return RespRcptOK }
+func (h *rejectHeloHandler) Data(_ context.Context, _ *Tx, _ []byte) *Response {
+	return RespDataOK
+}
+
+func TestHandlerRejectsHelo(t *testing.T) {
+	srv := &Server{
+		Hostname:    "test.local",
+		Handler:     &rejectHeloHandler{},
+		ReadTimeout: 5 * time.Second,
+	}
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+	go func() { _ = srv.Serve(l) }()
+
+	conn, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+
+	// Read banner.
+	if err := expectLine(rw, "220"); err != nil {
+		t.Fatalf("banner: %v", err)
+	}
+
+	// HELO should be rejected by the handler.
+	_, _ = rw.WriteString("HELO bad.domain\r\n")
+	_ = rw.Flush()
+	if err := expectLine(rw, "550"); err != nil {
+		t.Fatalf("expected 550 rejection: %v", err)
+	}
+
+	// Connection should still be usable — send EHLO (handler also rejects).
+	_, _ = rw.WriteString("EHLO another.domain\r\n")
+	_ = rw.Flush()
+	if err := expectLine(rw, "550"); err != nil {
+		t.Fatalf("expected 550 rejection for EHLO: %v", err)
+	}
+
+	_, _ = rw.WriteString("QUIT\r\n")
+	_ = rw.Flush()
+	_ = expectLine(rw, "221")
+
+	_ = l.Close()
+	_ = srv.Shutdown(context.Background())
+}
+
+type rejectMailHandler struct{}
+
+func (h *rejectMailHandler) Hello(_ context.Context, _ *Tx) *Response    { return RespHelloOK }
+func (h *rejectMailHandler) MailFrom(_ context.Context, _ *Tx) *Response { return RespBadSeq }
+func (h *rejectMailHandler) RcptTo(_ context.Context, _ *Tx) *Response   { return RespRcptOK }
+func (h *rejectMailHandler) Data(_ context.Context, _ *Tx, _ []byte) *Response {
+	return RespDataOK
+}
+
+func TestHandlerRejectsMailFrom(t *testing.T) {
+	srv := &Server{
+		Hostname:    "test.local",
+		Handler:     &rejectMailHandler{},
+		ReadTimeout: 5 * time.Second,
+	}
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+	go func() { _ = srv.Serve(l) }()
+
+	conn, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+
+	_ = expectLine(rw, "220")
+
+	_, _ = rw.WriteString("EHLO mx\r\n")
+	_ = rw.Flush()
+	_ = drainML(rw)
+
+	// MAIL FROM is rejected by handler.
+	_, _ = rw.WriteString("MAIL FROM:<s@t>\r\n")
+	_ = rw.Flush()
+	if err := expectLine(rw, "503"); err != nil {
+		t.Fatalf("expected 503 rejection: %v", err)
+	}
+
+	_, _ = rw.WriteString("QUIT\r\n")
+	_ = rw.Flush()
+	_ = expectLine(rw, "221")
+
+	_ = l.Close()
+	_ = srv.Shutdown(context.Background())
+}
+
+type rejectRcptHandler struct{}
+
+func (h *rejectRcptHandler) Hello(_ context.Context, _ *Tx) *Response    { return RespHelloOK }
+func (h *rejectRcptHandler) MailFrom(_ context.Context, _ *Tx) *Response { return RespMailOK }
+func (h *rejectRcptHandler) RcptTo(_ context.Context, _ *Tx) *Response {
+	return &Response{550, "5.1.1 User unknown"}
+}
+func (h *rejectRcptHandler) Data(_ context.Context, _ *Tx, _ []byte) *Response { return RespDataOK }
+
+func TestHandlerRejectsRcptTo(t *testing.T) {
+	srv := &Server{
+		Hostname:    "test.local",
+		Handler:     &rejectRcptHandler{},
+		ReadTimeout: 5 * time.Second,
+	}
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+	go func() { _ = srv.Serve(l) }()
+
+	conn, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+
+	_ = expectLine(rw, "220")
+
+	_, _ = rw.WriteString("EHLO mx\r\n")
+	_ = rw.Flush()
+	_ = drainML(rw)
+	_, _ = rw.WriteString("MAIL FROM:<s@t>\r\n")
+	_ = rw.Flush()
+	_ = expectLine(rw, "250")
+
+	// All recipients rejected → DATA returns 554 (no valid recipients).
+	_, _ = rw.WriteString("RCPT TO:<bad@t>\r\n")
+	_ = rw.Flush()
+	if err := expectLine(rw, "550"); err != nil {
+		t.Fatalf("expected 550: %v", err)
+	}
+
+	// DATA with no accepted recipients → 554.
+	_, _ = rw.WriteString("DATA\r\n")
+	_ = rw.Flush()
+	if err := expectLine(rw, "554"); err != nil {
+		t.Fatalf("expected 554 no valid recipients: %v", err)
+	}
+
+	_, _ = rw.WriteString("QUIT\r\n")
+	_ = rw.Flush()
+	_ = expectLine(rw, "221")
+
+	_ = l.Close()
+	_ = srv.Shutdown(context.Background())
+}
+
+// ---------------------------------------------------------------------------
+// Postcat edge cases
+// ---------------------------------------------------------------------------
+
+func TestPostcatParseEmptyBody(t *testing.T) {
+	dir := t.TempDir()
+	path, err := postcat.Write(dir, "s@test", []string{"r@test"}, []byte{})
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	msg, err := postcat.Parse(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(msg.RawMessage) != 0 {
+		t.Errorf("expected empty body, got %d bytes", len(msg.RawMessage))
+	}
+}
+
+func TestPostcatParsePreservesBody(t *testing.T) {
+	dir := t.TempDir()
+	// Body with CRLF line endings.
+	body := []byte("From: sender\r\nTo: rcpt\r\nSubject: test\r\n\r\nHello world\r\n")
+	path, err := postcat.Write(dir, "s@test", []string{"r@test"}, body)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	msg, err := postcat.Parse(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if string(msg.RawMessage) != string(body) {
+		t.Errorf("body mismatch:\n got:  %q\n want: %q", string(msg.RawMessage), string(body))
+	}
+}
+
+func TestPostcatParseNoTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	// Write a file manually with only S and R records (no T).
+	path := filepath.Join(dir, "notimestamp.eml")
+	if err := os.WriteFile(path, []byte("S sender@t\nR rcpt@t\n\nbody\r\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	msg, err := postcat.Parse(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if msg.Sender != "sender@t" {
+		t.Errorf("sender = %q, want sender@t", msg.Sender)
+	}
+	if msg.Time.IsZero() {
+		// Acceptable — no T line means zero time.
+	}
+}
+
+// ---------------------------------------------------------------------------
+// acceptAllHandler
+// ---------------------------------------------------------------------------
 
 type acceptAllHandler struct{}
 

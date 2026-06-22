@@ -110,7 +110,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 					phase = phaseHelo
 				}
 			case "STARTTLS":
-				resp, tlsReady = s.handleStartTLS(conn, tx, gotHelo, tlsReady)
+				resp, tlsReady = s.handleStartTLS(conn, tx, gotHelo, tlsReady, resumeCh)
 			case "MAIL":
 				resp = s.handleMail(conn, cmd, tx, phase, gotHelo, tlsReady)
 				if resp.Code == 250 {
@@ -194,14 +194,15 @@ func (s *Server) readCommands(
 			slog.String("args", truncate(args, 120)),
 		)
 
-		if verb == "DATA" {
-			// Send DATA command so the worker knows to read the body.
+		if verb == "DATA" || verb == "STARTTLS" {
+			// Send DATA/STARTTLS so the worker can take over the connection
+			// (body read or TLS handshake) without the reader racing for bytes.
 			select {
 			case events <- smtpCmd{verb: verb, args: args}:
 			case <-ctx.Done():
 				return
 			}
-			// Pause until the worker tells us the body has been read.
+			// Pause until worker signals resume (body read / TLS upgrade done).
 			select {
 			case <-resumeCh:
 			case <-ctx.Done():
@@ -335,26 +336,34 @@ func (s *Server) handleEhlo(
 func (s *Server) handleStartTLS(
 	conn *connState, tx *Tx,
 	gotHelo, tlsReady bool,
+	resumeCh chan<- struct{},
 ) (*Response, bool) {
 	if tlsReady {
+		resumeCh <- struct{}{}
 		return &Response{503, "5.5.1 STARTTLS already done"}, true
 	}
 	if !gotHelo {
+		resumeCh <- struct{}{}
 		return &Response{503, "5.5.1 EHLO required first"}, false
 	}
 	if s.TLSConfig == nil {
+		resumeCh <- struct{}{}
 		return &Response{502, "5.5.1 STARTTLS not supported"}, false
 	}
 	conn.write("220 2.0.0 Ready to start TLS\r\n", s.WriteTimeout)
 
 	tlsConn := tls.Server(conn.netConn, s.TLSConfig.Clone())
 	if err := tlsConn.Handshake(); err != nil {
+		resumeCh <- struct{}{}
 		s.logError("tls_handshake_error", slog.String("error", err.Error()))
 		return &Response{454, "4.7.0 TLS handshake failed"}, false
 	}
 	conn.netConn = tlsConn
 	conn.r = bufio.NewReader(tlsConn)
 	conn.w = bufio.NewWriter(tlsConn)
+
+	// Signal the reader goroutine to resume on the new TLS connection.
+	resumeCh <- struct{}{}
 
 	cs := tlsConn.ConnectionState()
 	tx.TLS = &cs
