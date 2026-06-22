@@ -1002,18 +1002,17 @@ func TestSMTPShutdownDuringTransaction(t *testing.T) {
 	sendAndExpect(t, conn, scanner, "EHLO mx\r\n", "250")
 	_ = readMultiline(t, scanner)
 
-	// Trigger shutdown while a connection is active.
+	// Trigger shutdown; the server should send 421 to the active connection.
 	go func() {
 		_ = srv.Shutdown(context.Background())
 	}()
 
-	// The server should send 421 to the active connection.
-	// Read the next response — it should be 421.
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "421") {
-			return // expected
-		}
+	// Read the next response — must be 421.
+	if !scanner.Scan() {
+		t.Fatal("expected 421 shutdown response, got EOF")
+	}
+	if !strings.HasPrefix(scanner.Text(), "421") {
+		t.Fatalf("expected 421 shutdown, got %q", scanner.Text())
 	}
 
 	_ = l.Close()

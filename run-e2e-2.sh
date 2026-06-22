@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
+source "$(dirname "$0")/_e2e_tools.sh"
 
 TMPDIR=$(mktemp -d)
 POSTCAT_DIR="$TMPDIR/mail"
@@ -8,6 +9,10 @@ SERVER_ADDR="127.0.0.1:12526"
 
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
+
+echo "=== Building ==="
+go build -o test-server ./cmd/test-server/
+go build -o verify-postcat ./cmd/verify-postcat/
 
 echo "=== Starting server ==="
 ./test-server "$SERVER_ADDR" "$POSTCAT_DIR" > "$TMPDIR/server.out" 2> "$TMPDIR/server.err" &
@@ -20,7 +25,7 @@ echo "Server ready."
 
 echo ""
 echo "=== Test 1: null sender ==="
-nix shell nixpkgs#swaks --command swaks \
+"$SWAKS" \
     --from '<>' \
     --to nulltest@example.com \
     --server "$SERVER_ADDR" \
@@ -29,8 +34,7 @@ nix shell nixpkgs#swaks --command swaks \
 
 echo ""
 echo "=== Test 2: precise body ==="
-# Use --body for exact body content.
-nix shell nixpkgs#swaks --command swaks \
+"$SWAKS" \
     --from bob@x.com \
     --to alice@x.com \
     --server "$SERVER_ADDR" \

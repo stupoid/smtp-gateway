@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Test SMTP gateway against common CLI mail clients:
-#   mutt, msmtp, curl (smtp://), heirloom-mailx, swaks (baseline)
+#   mutt, msmtp, curl (smtp://), swaks (baseline)
 set -euo pipefail
 cd "$(dirname "$0")"
+source "$(dirname "$0")/_e2e_tools.sh"
 
 TMPDIR=$(mktemp -d)
 POSTCAT_DIR="$TMPDIR/mail"
@@ -40,7 +41,7 @@ PORT="${ADDR#*:}"
 # --------------------------------------------------
 echo ""
 echo "========== mutt =========="
-echo "body via mutt" | nix shell nixpkgs#mutt --command mutt \
+echo "body via mutt" | "$MUTT" \
     -e "set smtp_url=smtp://$ADDR" \
     -e "set ssl_starttls=no" \
     -e "set ssl_force_tls=no" \
@@ -54,7 +55,7 @@ echo "mutt sent OK"
 echo ""
 echo "========== msmtp =========="
 printf "Subject: msmtp test\r\n\r\nbody via msmtp\r\n" | \
-    nix shell nixpkgs#msmtp --command msmtp \
+    "$MSMTP" \
     --host="$HOST" --port="$PORT" \
     --from=msmtp@client.local \
     -- \
@@ -65,7 +66,7 @@ echo "msmtp sent OK"
 echo ""
 echo "========== curl (smtp://) =========="
 printf "From: curl@client.local\r\nTo: curl-recip@example.com\r\nSubject: curl test\r\n\r\nbody via curl\r\n" > "$TMPDIR/curl-body.txt"
-nix shell nixpkgs#curl --command curl \
+"$CURL" \
     smtp://"$ADDR" \
     --mail-from curl@client.local \
     --mail-rcpt curl-recip@example.com \
@@ -76,7 +77,7 @@ echo "curl sent OK"
 # --------------------------------------------------
 echo ""
 echo "========== swaks (null sender) =========="
-nix shell nixpkgs#swaks --command swaks \
+"$SWAKS" \
     --from '<>' \
     --to null@bounce.local \
     --server "$ADDR" \
@@ -87,7 +88,7 @@ echo "swaks null sender OK"
 # --------------------------------------------------
 echo ""
 echo "========== swaks (multiple rcpt) =========="
-nix shell nixpkgs#swaks --command swaks \
+"$SWAKS" \
     --from multi@client.local \
     --to rcpt1@a.local,rcpt2@b.local,rcpt3@c.local \
     --server "$ADDR" \

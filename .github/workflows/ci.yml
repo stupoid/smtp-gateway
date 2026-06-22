@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.2
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - run: go test -race -count=1 ./...
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq swaks mutt msmtp netcat-openbsd
+
+      - name: e2e — basic
+        run: ./run-e2e.sh
+
+      - name: e2e — null sender + precise body
+        run: ./run-e2e-2.sh
+
+      - name: e2e — error handling
+        run: ./run-e2e-errors.sh
+
+      - name: e2e — pipelining
+        run: ./run-e2e-pipeline.sh
+
+      - name: e2e — CLI clients (mutt, msmtp, curl, swaks)
+        run: ./run-e2e-clients.sh
+
+      - name: e2e — concurrency correctness + load
+        run: ./run-e2e-concurrency.sh

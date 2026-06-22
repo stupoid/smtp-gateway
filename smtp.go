@@ -99,7 +99,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 	)
 
 	// Start the SMTP command reader goroutine.
-	go s.readCommands(context.Background(), conn, events, resumeCh, readerDone)
+	go s.readCommands(s.ctx, conn, events, resumeCh, readerDone)
 
 	// Worker loop: process commands sequentially.
 	for {
@@ -422,8 +422,7 @@ func (s *Server) handleMail(
 
 	if s.MaxMessageSize > 0 {
 		if sizeStr, ok := params["SIZE"]; ok {
-			var size int
-			if _, err := fmt.Sscanf(sizeStr, "%d", &size); err == nil && size > s.MaxMessageSize {
+			if size, err := strconv.Atoi(sizeStr); err == nil && size > s.MaxMessageSize {
 				return RespMessageSize
 			}
 		}

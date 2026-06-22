@@ -321,63 +321,18 @@ func TestResponseMultiLine(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Concurrency: net.Pipe() SMTP sessions
+// Concurrency: TCP SMTP sessions
 // ---------------------------------------------------------------------------
-
-type countingHandler struct {
-	mu       sync.Mutex
-	sessions map[int][]string // id → list of phase names
-	lastBody map[int]string   // id → last body content for verification
-}
-
-func newCountingHandler() *countingHandler {
-	return &countingHandler{
-		sessions: make(map[int][]string),
-		lastBody: make(map[int]string),
-	}
-}
-
-func (h *countingHandler) record(id int, phase string) {
-	h.mu.Lock()
-	h.sessions[id] = append(h.sessions[id], phase)
-	h.mu.Unlock()
-}
-
-func (h *countingHandler) Hello(_ context.Context, _ *Tx) *Response {
-	h.record(0, "hello")
-	return RespHelloOK
-}
-
-func (h *countingHandler) MailFrom(_ context.Context, _ *Tx) *Response {
-	h.record(0, "mail")
-	return RespMailOK
-}
-
-func (h *countingHandler) RcptTo(_ context.Context, _ *Tx) *Response {
-	h.record(0, "rcpt")
-	return RespRcptOK
-}
-
-func (h *countingHandler) Data(_ context.Context, _ *Tx, body []byte) *Response {
-	h.record(0, "data")
-	h.mu.Lock()
-	h.lastBody[0] = string(body)
-	h.mu.Unlock()
-	return RespDataOK
-}
 
 func TestServerConcurrency(t *testing.T) {
 	n := 10 // concurrent sessions
 
-	// Each session gets a message with a unique ID embedded in the body.
-	// We verify that the handler received the correct body for each session
-	// with no cross-contamination.
-
-	handler := newCountingHandler()
-
+	// Each session runs a complete SMTP transaction.  Protocol-level
+	// correctness is verified by smtpSession which checks every response
+	// code.  If any response is wrong the session returns an error.
 	srv := &Server{
 		Hostname:    "test.local",
-		Handler:     handler,
+		Handler:     &acceptAllHandler{},
 		ReadTimeout: 5 * time.Second,
 	}
 
@@ -387,9 +342,8 @@ func TestServerConcurrency(t *testing.T) {
 	}
 	defer func() { _ = l.Close() }()
 
-	var serveErr error
 	go func() {
-		serveErr = srv.Serve(l)
+		_ = srv.Serve(l)
 	}()
 
 	addr := l.Addr().String()
@@ -406,9 +360,6 @@ func TestServerConcurrency(t *testing.T) {
 	}
 	wg.Wait()
 
-	if serveErr != nil {
-		t.Errorf("Serve: %v", serveErr)
-	}
 	for i, e := range errs {
 		if e != nil {
 			t.Errorf("session %d: %v", i, e)

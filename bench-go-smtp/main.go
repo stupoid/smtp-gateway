@@ -62,7 +62,12 @@ func (s *postcatSession) Data(r io.Reader) error {
 	}
 	defer func() { _ = os.Remove(f.Name()) }()
 
-	fmt.Fprintf(f, "S %s\n", s.from)
+	// Format null sender as <> to match smtp-gateway's postcat format.
+	sender := s.from
+	if sender == "" || sender == "<>" {
+		sender = "<>"
+	}
+	fmt.Fprintf(f, "S %s\n", sender)
 	for _, rcpt := range s.to {
 		fmt.Fprintf(f, "R %s\n", rcpt)
 	}
