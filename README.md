@@ -280,7 +280,24 @@ needs mutable state.
 | SIZE | ✅ (when `MaxMessageSize > 0`) |
 | Graceful shutdown | ✅ |
 | CHUNKING / BDAT (RFC 3030) | ✅ |
-| SMTP AUTH | Not yet |
+
+### SMTP AUTH — out of scope
+
+SMTP authentication (RFC 4954, SASL) is a submission protocol — it lets a
+user prove they're allowed to relay mail through a server.  This library is
+an **inbound gateway**: it receives mail from the internet on port 25 and
+routes it to storage.  MX delivery is unauthenticated by design.
+
+For access control at the gateway layer, use the Handler callbacks you
+already have — check `tx.RemoteAddr` in `Hello`, inspect `tx.MailFrom`,
+or run reverse-DNS on the connecting IP.  Mutual TLS (`tls.Config.ClientAuth`)
+also works without SASL machinery.
+
+If you need a full SMTP submission server with AUTH for your users to send
+outbound mail (port 587), consider:
+
+- **[mox](https://github.com/mjl-/mox)** — full mail server in Go, includes submission
+- **[go-smtp](https://github.com/emersion/go-smtp)** — SMTP client/server library with SASL support
 
 ## Logging
 
