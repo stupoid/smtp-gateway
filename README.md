@@ -92,10 +92,11 @@ package main
 
 import (
     "context"
-    "crypto/tls"
     "log/slog"
     "net"
     "os"
+    "strings"
+    "time"
 
     "github.com/stupoid/smtp-gateway"
 )
@@ -220,6 +221,11 @@ Subject: Test
 
 ### Programmatic access
 
+The `internal/postcat` package provides a programmatic API for reading and
+writing postcat files.  Note that Go's `internal` convention restricts this
+import to code within the `smtp-gateway` module — it is not available to
+external consumers.
+
 ```go
 import "github.com/stupoid/smtp-gateway/internal/postcat"
 
@@ -259,12 +265,36 @@ Flags:
 - **MailFrom** — called after MAIL FROM. `tx.MailFrom` and `tx.Params` are populated.
 - **RcptTo** — called for each RCPT TO. Accept/reject individually.
   `tx.Rcpts` has all presented; `tx.Accepted` has the accepted subset.
-- **Data** — called with the raw RFC 5322 message. Only called if ≥1
-  recipient was accepted. Return non-250 to bounce.
+- **Data** — called with the raw RFC 5322 message. Also called for
+  BDAT/CHUNKING (RFC 3030) transactions where chunks are accumulated in
+  `tx.BodyBuf` and passed as `body`. Only called if ≥1 recipient was
+  accepted. Return non-250 to bounce.
 
 Callbacks are **serialized per connection**. The same handler instance
 handles multiple connections concurrently — make it goroutine-safe if it
 needs mutable state.
+
+### Common pitfalls
+
+- **Handler must be goroutine-safe.** One `Handler` instance handles all
+  connections. Avoid unsynchronized mutable fields — use `sync.Mutex`
+  or channels.
+
+- **nil → 503.** Returning `nil` from any callback causes the server to
+  respond `503 Bad sequence`. If you want to accept, return the
+  appropriate `Resp*` constant.
+
+- **PostcatDir requires an existing directory.** The server does not
+  create it automatically — use `os.MkdirAll` before `Serve`.
+
+- **STARTTLS needs TLSConfig set before Serve.** The EHLO banner is
+  built once per connection, not lazily. Set `Server.TLSConfig` before
+  calling `Serve`.
+
+- **Body vs BodyBuf.** For DATA transactions, the body is passed directly
+  to `Handler.Data`. For BDAT/CHUNKING, chunks accumulate in `tx.BodyBuf`
+  and are passed as `body` on the LAST chunk. In both cases your `Data`
+  handler receives the complete message.
 
 ## Protocol support
 
