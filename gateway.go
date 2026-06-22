@@ -232,7 +232,7 @@ func (s *Server) Serve(ln net.Listener) error {
 			}
 		}
 		s.wg.Add(1)
-		go func() {
+		go func(conn net.Conn) {
 			defer s.wg.Done()
 			defer func() {
 				if s.MaxConnections > 0 {
@@ -240,7 +240,7 @@ func (s *Server) Serve(ln net.Listener) error {
 				}
 			}()
 			s.handleConn(conn)
-		}()
+		}(conn)
 	}
 }
 
