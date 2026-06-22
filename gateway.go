@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
@@ -171,7 +172,8 @@ type Server struct {
 
 	// PostcatDir, when non-empty, causes the server to write each
 	// accepted message as a Postfix-queue-file-compatible file in
-	// this directory (see internal/postcat).
+	// this directory (see internal/postcat).  The directory is
+	// created with mode 0750 if it does not exist.
 	PostcatDir string
 
 	// --- internal ---
@@ -199,6 +201,11 @@ func Slog(l *slog.Logger) Logger {
 func (s *Server) Serve(ln net.Listener) error {
 	if s.Handler == nil {
 		return errors.New("smtpgateway: Handler is nil")
+	}
+	if s.PostcatDir != "" {
+		if err := os.MkdirAll(s.PostcatDir, 0750); err != nil {
+			return fmt.Errorf("smtpgateway: PostcatDir: %w", err)
+		}
 	}
 	s.ln = ln
 	s.ctx, s.cancel = context.WithCancel(context.Background())

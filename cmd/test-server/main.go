@@ -44,10 +44,6 @@ func run() error {
 	addr := os.Args[1]
 	postcatDir := os.Args[2]
 
-	if err := os.MkdirAll(postcatDir, 0750); err != nil {
-		return fmt.Errorf("mkdir %s: %w", postcatDir, err)
-	}
-
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)

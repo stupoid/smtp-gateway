@@ -284,9 +284,6 @@ needs mutable state.
   respond `503 Bad sequence`. If you want to accept, return the
   appropriate `Resp*` constant.
 
-- **PostcatDir requires an existing directory.** The server does not
-  create it automatically — use `os.MkdirAll` before `Serve`.
-
 - **STARTTLS needs TLSConfig set before Serve.** The EHLO banner is
   built once per connection, not lazily. Set `Server.TLSConfig` before
   calling `Serve`.
