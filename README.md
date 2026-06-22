@@ -38,8 +38,10 @@ flowchart TD
 **Data flow:** A reader goroutine scans SMTP commands into a buffered channel
 (32 deep) while the worker processes them sequentially. This enables RFC 2920
 PIPELINING — clients can send multiple commands without waiting for responses.
-During DATA and STARTTLS, the reader pauses so the worker can take over the
-connection (body read or TLS handshake), then signals the reader to resume.
+Internally, the reader pauses during DATA (so the worker can read the body
+directly) and during STARTTLS (so the TLS handshake has exclusive access to
+the connection). STARTTLS itself is driven by `Server.TLSConfig` — just set
+it and the server handles the upgrade.
 
 **Concurrency:** Each connection gets one goroutine. A semaphore caps
 concurrent connections. Per-phase callbacks are serialized per connection
