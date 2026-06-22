@@ -63,7 +63,7 @@ func Write(dir, mailFrom string, accepted []string, body []byte) (string, error)
 
 	if err := w.Flush(); err != nil {
 		// Remove the incomplete file so downstream consumers don't see
-		// a truncated artifact.
+		// a truncated artefact.
 		_ = f.Close()
 		_ = os.Remove(path)
 		return path, fmt.Errorf("flush postcat file: %w", err)

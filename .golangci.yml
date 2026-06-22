@@ -11,7 +11,7 @@ linters:
     - revive
   settings:
     misspell:
-      locale: US
+      locale: UK
     revive:
       rules:
         - name: blank-imports

@@ -247,7 +247,7 @@ func (h *dotUnstuffRecorder) Data(_ context.Context, _ *Tx, body []byte) *Respon
 
 // TestSMTPSmugglingBareLFDot verifies that a bare-LF dot line
 // (\n.\n) terminates DATA early.  This is the correct anti-smuggling
-// behavior described at https://www.postfix.org/smtp-smuggling.html.
+// behaviour described at https://www.postfix.org/smtp-smuggling.html.
 func TestSMTPSmugglingBareLFDot(t *testing.T) {
 	conn, scanner := dialServer(t)
 
@@ -628,7 +628,7 @@ func testCert(t *testing.T) tls.Certificate {
 
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{Organization: []string{"Test"}},
+		Subject:      pkix.Name{Organization: []string{"Test"}}, //nolint:misspell // stdlib field name
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 		DNSNames:     []string{"localhost", "test.local"},

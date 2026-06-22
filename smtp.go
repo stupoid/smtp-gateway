@@ -169,7 +169,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 					_ = conn.write(RespGoodbye.String(), s.WriteTimeout)
 					return
 				default:
-					resp = &Response{500, "5.5.1 Command not recognized"}
+					resp = &Response{500, "5.5.1 Command not recognised"}
 				}
 			}
 
@@ -261,7 +261,7 @@ func (s *Server) readCommands(
 // terminator "\r\n.\r\n".  Returns the unstuffed bytes (raw RFC 5322
 // message).  Respects maxSize (0 = unlimited).  On overflow, drains
 // the remaining body lines and returns ErrMessageTooLarge so the
-// protocol stream stays synchronized.
+// protocol stream stays synchronised.
 func readDotUnstuffed(r *bufio.Reader, maxSize int, conn *connState, readTimeout time.Duration) ([]byte, error) {
 	var buf []byte
 	if maxSize > 0 {
@@ -283,7 +283,7 @@ func readDotUnstuffed(r *bufio.Reader, maxSize int, conn *connState, readTimeout
 		}
 		if maxSize > 0 && len(buf)+len(line)+2 > maxSize {
 			// Drain remaining body lines so the protocol stream stays
-			// synchronized.  If a read error occurs during drain
+			// synchronised.  If a read error occurs during drain
 			// (the client is likely waiting for the 552 response),
 			// return immediately — the overflow was already detected.
 			for {
@@ -621,7 +621,7 @@ func (s *Server) handleBdat(
 	defer func() { resumeCh <- struct{}{} }()
 
 	// Parse BDAT arguments BEFORE guard checks so we know how many
-	// bytes to discard on early rejection (keeps protocol synchronized).
+	// bytes to discard on early rejection (keeps protocol synchronised).
 	size, last, err := parseBdatArgs(cmd.args)
 	if err != nil {
 		*inBdat = false
@@ -636,7 +636,7 @@ func (s *Server) handleBdat(
 	}
 
 	// discardChunk reads and discards `size` raw bytes from the connection
-	// to keep the protocol stream synchronized on rejection.
+	// to keep the protocol stream synchronised on rejection.
 	discardChunk := func() {
 		if size > 0 {
 			if _, discErr := readNBytes(conn.r, size, conn, bodyReadTimeout); discErr != nil {
