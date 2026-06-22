@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -78,6 +79,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 		phase    = phaseInit
 		gotHelo  bool
 		tlsReady bool
+		inBdat   bool
 
 		// Pipelining: reader sends commands to a channel.
 		events   = make(chan smtpCmd, 32)
@@ -98,48 +100,66 @@ func (s *Server) handleConn(netConn net.Conn) {
 			}
 			var resp *Response
 
-			switch cmd.verb {
-			case "HELO":
-				resp, gotHelo = s.handleHelo(conn, cmd, tx, phase, gotHelo)
-				if gotHelo {
-					phase = phaseHelo
+			// During a BDAT chunk sequence, only BDAT, RSET, NOOP,
+			// and QUIT are allowed.  DATA/STARTTLS must signal
+			// resumeCh since the reader is paused waiting for them.
+			if inBdat && cmd.verb != "BDAT" && cmd.verb != "RSET" && cmd.verb != "NOOP" && cmd.verb != "QUIT" {
+				if cmd.verb == "DATA" || cmd.verb == "STARTTLS" {
+					resumeCh <- struct{}{}
 				}
-			case "EHLO":
-				resp, gotHelo = s.handleEhlo(conn, cmd, tx, phase, gotHelo)
-				if gotHelo {
-					phase = phaseHelo
-				}
-			case "STARTTLS":
-				resp, tlsReady = s.handleStartTLS(conn, tx, gotHelo, tlsReady, resumeCh)
-			case "MAIL":
-				resp = s.handleMail(conn, cmd, tx, phase, gotHelo, tlsReady)
-				if resp.Code == 250 {
-					phase = phaseMail
-				}
-			case "RCPT":
-				resp = s.handleRcpt(conn, cmd, tx, &phase, gotHelo)
-				if phase < phaseRcpt && resp.Code == 250 {
-					phase = phaseRcpt
-				}
-			case "DATA":
-				resp = s.handleData(conn, cmd, tx, phase, resumeCh)
-				if resp.Code == 250 {
-					phase = phaseInit
+				resp = &Response{503, "5.5.1 Bad sequence of commands"}
+			} else {
+				switch cmd.verb {
+				case "HELO":
+					resp, gotHelo = s.handleHelo(conn, cmd, tx, phase, gotHelo)
+					if gotHelo {
+						phase = phaseHelo
+					}
+				case "EHLO":
+					resp, gotHelo = s.handleEhlo(conn, cmd, tx, phase, gotHelo)
+					if gotHelo {
+						phase = phaseHelo
+					}
+				case "STARTTLS":
+					resp, tlsReady = s.handleStartTLS(conn, tx, gotHelo, tlsReady, resumeCh)
+				case "MAIL":
+					resp = s.handleMail(conn, cmd, tx, phase, gotHelo, tlsReady)
+					if resp.Code == 250 {
+						phase = phaseMail
+					}
+				case "RCPT":
+					resp = s.handleRcpt(conn, cmd, tx, &phase, gotHelo)
+					if phase < phaseRcpt && resp.Code == 250 {
+						phase = phaseRcpt
+					}
+				case "DATA":
+					resp = s.handleData(conn, cmd, tx, phase, resumeCh)
+					if resp.Code == 250 {
+						phase = phaseInit
+						tx = s.newTx(netConn)
+					}
+				case "BDAT":
+					resp = s.handleBdat(conn, cmd, tx, phase, &inBdat, resumeCh)
+					if resp != nil && resp.Code == 250 && !inBdat {
+						// Transaction reset on LAST chunk (handleBdat clears inBdat).
+						phase = phaseInit
+						tx = s.newTx(netConn)
+					}
+				case "RSET":
+					resp = &Response{250, "2.0.0 OK"}
 					tx = s.newTx(netConn)
+					phase = phaseInit
+					inBdat = false
+				case "NOOP":
+					resp = &Response{250, "2.0.0 OK"}
+				case "VRFY", "EXPN":
+					resp = RespVrfyDisabled
+				case "QUIT":
+					conn.write(RespGoodbye.String(), s.WriteTimeout)
+					return
+				default:
+					resp = &Response{500, "5.5.1 Command not recognized"}
 				}
-			case "RSET":
-				resp = &Response{250, "2.0.0 OK"}
-				tx = s.newTx(netConn)
-				phase = phaseInit
-			case "NOOP":
-				resp = &Response{250, "2.0.0 OK"}
-			case "VRFY", "EXPN":
-				resp = RespVrfyDisabled
-			case "QUIT":
-				conn.write(RespGoodbye.String(), s.WriteTimeout)
-				return
-			default:
-				resp = &Response{500, "5.5.1 Command not recognized"}
 			}
 
 			if resp != nil {
@@ -194,8 +214,8 @@ func (s *Server) readCommands(
 			slog.String("args", truncate(args, 120)),
 		)
 
-		if verb == "DATA" || verb == "STARTTLS" {
-			// Send DATA/STARTTLS so the worker can take over the connection
+		if verb == "DATA" || verb == "BDAT" || verb == "STARTTLS" {
+			// Send DATA/BDAT/STARTTLS so the worker can take over the connection
 			// (body read or TLS handshake) without the reader racing for bytes.
 			select {
 			case events <- smtpCmd{verb: verb, args: args}:
@@ -313,6 +333,7 @@ func (s *Server) handleEhlo(
 	ext = append(ext, "8BITMIME")
 	ext = append(ext, "ENHANCEDSTATUSCODES")
 	ext = append(ext, "SMTPUTF8")
+	ext = append(ext, "CHUNKING")
 	if s.TLSConfig != nil {
 		ext = append(ext, "STARTTLS")
 	}
@@ -505,6 +526,126 @@ func (s *Server) handleData(
 		}
 	}
 
+	return resp
+}
+
+// --- BDAT / CHUNKING (RFC 3030) ---
+
+// parseBdatArgs parses "BDAT" arguments: "<size> [LAST]".
+func parseBdatArgs(args string) (size int, last bool, err error) {
+	fields := strings.Fields(args)
+	if len(fields) < 1 || len(fields) > 2 {
+		return 0, false, ErrBadSyntax
+	}
+	n, err := strconv.Atoi(fields[0])
+	if err != nil || n < 0 {
+		return 0, false, ErrBadSyntax
+	}
+	if len(fields) == 2 {
+		if strings.ToUpper(fields[1]) != "LAST" {
+			return 0, false, ErrBadSyntax
+		}
+		last = true
+	}
+	return n, last, nil
+}
+
+// readNBytes reads exactly n raw bytes from r.  No dot-unstuffing,
+// no line-oriented processing — just raw binary data for BDAT chunks.
+func readNBytes(r *bufio.Reader, n int, conn *connState, readTimeout time.Duration) ([]byte, error) {
+	if n == 0 {
+		return nil, nil
+	}
+	buf := make([]byte, n)
+	if readTimeout > 0 {
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
+	}
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return buf, err
+	}
+	return buf, nil
+}
+
+func (s *Server) handleBdat(
+	conn *connState, cmd smtpCmd, tx *Tx,
+	phase int, inBdat *bool, resumeCh chan<- struct{},
+) *Response {
+	// Every return path must signal resumeCh — the reader is paused.
+	if phase < phaseRcpt {
+		*inBdat = false
+		resumeCh <- struct{}{}
+		return &Response{503, "5.5.1 RCPT required first"}
+	}
+	if len(tx.Accepted) == 0 {
+		*inBdat = false
+		resumeCh <- struct{}{}
+		return &Response{554, "5.5.1 No valid recipients"}
+	}
+
+	size, last, err := parseBdatArgs(cmd.args)
+	if err != nil {
+		*inBdat = false
+		resumeCh <- struct{}{}
+		return &Response{501, "5.5.4 Bad BDAT syntax"}
+	}
+
+	// MaxMessageSize check before reading.
+	if s.MaxMessageSize > 0 && len(tx.BodyBuf)+size > s.MaxMessageSize {
+		// Read and discard chunk data to keep the protocol stream synchronized.
+		if size > 0 {
+			if _, err := readNBytes(conn.r, size, conn, s.ReadTimeout); err != nil {
+				s.logError("bdat_read_error", slog.String("error", err.Error()))
+				*inBdat = false
+				resumeCh <- struct{}{}
+				return &Response{451, "4.3.0 Error reading chunk"}
+			}
+		}
+		*inBdat = false
+		resumeCh <- struct{}{}
+		return RespMessageSize
+	}
+
+	// Read the chunk data.
+	chunk, err := readNBytes(conn.r, size, conn, s.ReadTimeout)
+	if err != nil {
+		s.logError("bdat_read_error", slog.String("error", err.Error()))
+		*inBdat = false
+		resumeCh <- struct{}{}
+		return &Response{451, "4.3.0 Error reading chunk"}
+	}
+
+	tx.BodyBuf = append(tx.BodyBuf, chunk...)
+
+	if !last {
+		// Intermediate chunk — stay in BDAT mode.
+		*inBdat = true
+		resumeCh <- struct{}{}
+		return &Response{250, "2.0.0 OK"}
+	}
+
+	// LAST chunk — message complete.  RFC 3030 Section 3: CHUNKING implies
+	// BINARYMIME, so no 8BITMIME check needed (unlike DATA).
+	*inBdat = false
+	resumeCh <- struct{}{}
+
+	s.logInfo("bdat_received",
+		slog.Int("bytes", len(tx.BodyBuf)),
+		slog.String("mail_from", tx.MailFrom),
+		slog.Int("recipients", len(tx.Accepted)),
+	)
+
+	resp := s.Handler.Data(context.Background(), tx, tx.BodyBuf)
+
+	if resp != nil && resp.Code == 250 && s.PostcatDir != "" {
+		if path, err := postcat.Write(s.PostcatDir, tx.MailFrom, tx.Accepted, tx.BodyBuf); err != nil {
+			s.logError("postcat_write_error",
+				slog.String("error", err.Error()),
+				slog.String("path", path),
+			)
+		}
+	}
+
+	tx.BodyBuf = nil
 	return resp
 }
 

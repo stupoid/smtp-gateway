@@ -2,16 +2,19 @@ package smtpgateway
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -987,4 +990,283 @@ func TestSMTPShutdownDuringTransaction(t *testing.T) {
 
 	_ = l.Close()
 	_ = srv.Shutdown(context.Background())
+}
+
+// ---------------------------------------------------------------------------
+// BDAT / CHUNKING (RFC 3030)
+// ---------------------------------------------------------------------------
+
+// bdatRecorder records the body passed to Handler.Data for verification.
+type bdatRecorder struct {
+	mu       sync.Mutex
+	lastBody []byte
+}
+
+func (h *bdatRecorder) Hello(_ context.Context, _ *Tx) *Response    { return RespHelloOK }
+func (h *bdatRecorder) MailFrom(_ context.Context, _ *Tx) *Response { return RespMailOK }
+func (h *bdatRecorder) RcptTo(_ context.Context, _ *Tx) *Response   { return RespRcptOK }
+func (h *bdatRecorder) Data(_ context.Context, _ *Tx, body []byte) *Response {
+	h.mu.Lock()
+	h.lastBody = append([]byte{}, body...)
+	h.mu.Unlock()
+	return RespDataOK
+}
+
+func TestSMTPChunkingAdvertised(t *testing.T) {
+	conn, scanner := dialServer(t)
+
+	write(t, conn, "EHLO client\r\n")
+	lines := readMultiline(t, scanner)
+	found := false
+	for _, line := range lines {
+		if strings.Contains(line, "CHUNKING") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("CHUNKING not advertised in EHLO response")
+	}
+	write(t, conn, "QUIT\r\n")
+	expectResp(t, scanner, "221")
+}
+
+// bdatServer starts a server with the given handler and returns the connection + scanner.
+func bdatServer(t *testing.T, h Handler) (net.Conn, *bufio.Scanner, *Server) {
+	t.Helper()
+	srv := &Server{
+		Hostname:    "test.local",
+		Handler:     h,
+		ReadTimeout: 5 * time.Second,
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+
+	conn, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	scanner := bufio.NewScanner(conn)
+	_ = readResp(t, scanner) // banner
+	return conn, scanner, srv
+}
+
+// bdatSetup performs EHLO → MAIL FROM → RCPT TO.
+func bdatSetup(t *testing.T, conn net.Conn, scanner *bufio.Scanner) {
+	t.Helper()
+	sendAndExpect(t, conn, scanner, "EHLO t\r\n", "250")
+	_ = readMultiline(t, scanner)
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
+}
+
+// sendBdat writes "BDAT N [LAST]\r\n" followed by data, then reads 250.
+func sendBdat(t *testing.T, conn net.Conn, scanner *bufio.Scanner, size int, last bool, data string) {
+	t.Helper()
+	cmd := fmt.Sprintf("BDAT %d\r\n", size)
+	if last {
+		cmd = fmt.Sprintf("BDAT %d LAST\r\n", size)
+	}
+	write(t, conn, cmd)
+	if size > 0 {
+		write(t, conn, data)
+	}
+	expectResp(t, scanner, "250")
+}
+
+func TestSMTPBDATZeroSize(t *testing.T) {
+	conn, scanner, _ := bdatServer(t, &acceptAllHandler{})
+	bdatSetup(t, conn, scanner)
+	sendBdat(t, conn, scanner, 0, true, "")
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
+func TestSMTPBDATSingleChunk(t *testing.T) {
+	rec := &bdatRecorder{}
+	conn, scanner, _ := bdatServer(t, rec)
+	bdatSetup(t, conn, scanner)
+
+	body := "Subject: test\r\n\r\nHello\r\n"
+	write(t, conn, fmt.Sprintf("BDAT %d LAST\r\n", len(body)))
+	write(t, conn, body)
+	expectResp(t, scanner, "250")
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+
+	rec.mu.Lock()
+	if string(rec.lastBody) != body {
+		t.Errorf("body = %q, want %q", string(rec.lastBody), body)
+	}
+	rec.mu.Unlock()
+}
+
+func TestSMTPBDATMultipleChunks(t *testing.T) {
+	rec := &bdatRecorder{}
+	conn, scanner, _ := bdatServer(t, rec)
+	bdatSetup(t, conn, scanner)
+
+	sendBdat(t, conn, scanner, 6, false, "Header")
+	sendBdat(t, conn, scanner, 5, false, "Line\n")
+	sendBdat(t, conn, scanner, 4, true, "Body")
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+
+	rec.mu.Lock()
+	want := "HeaderLine\nBody"
+	if string(rec.lastBody) != want {
+		t.Errorf("body = %q, want %q", string(rec.lastBody), want)
+	}
+	rec.mu.Unlock()
+}
+
+func TestSMTPBDATBinaryData(t *testing.T) {
+	rec := &bdatRecorder{}
+	conn, scanner, _ := bdatServer(t, rec)
+	bdatSetup(t, conn, scanner)
+
+	bin := []byte{0x00, 0xFF, 0x80, 0x01, 0x02, 0x7F}
+	write(t, conn, fmt.Sprintf("BDAT %d LAST\r\n", len(bin)))
+	write(t, conn, string(bin))
+	expectResp(t, scanner, "250")
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+
+	rec.mu.Lock()
+	if !bytes.Equal(rec.lastBody, bin) {
+		t.Errorf("body = %v, want %v", rec.lastBody, bin)
+	}
+	rec.mu.Unlock()
+}
+
+func TestSMTPBDATBeforeRcpt(t *testing.T) {
+	conn, scanner, _ := bdatServer(t, &acceptAllHandler{})
+
+	sendAndExpect(t, conn, scanner, "EHLO t\r\n", "250")
+	_ = readMultiline(t, scanner)
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	// BDAT before RCPT TO → 503.
+	sendAndExpect(t, conn, scanner, "BDAT 0 LAST\r\n", "503")
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
+func TestSMTPBDATNoAcceptedRecipients(t *testing.T) {
+	conn, scanner, _ := bdatServer(t, &rejectRcptHandler{})
+
+	sendAndExpect(t, conn, scanner, "EHLO t\r\n", "250")
+	_ = readMultiline(t, scanner)
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<bad@t>\r\n", "550")
+	// All recipients rejected → 554.
+	sendAndExpect(t, conn, scanner, "BDAT 0 LAST\r\n", "554")
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
+func TestSMTPBDATMessageSizeExceeded(t *testing.T) {
+	srv := &Server{
+		Hostname:       "test.local",
+		Handler:        &acceptAllHandler{},
+		ReadTimeout:    5 * time.Second,
+		MaxMessageSize: 10,
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+
+	conn, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	scanner := bufio.NewScanner(conn)
+	_ = readResp(t, scanner)
+	bdatSetup(t, conn, scanner)
+
+	// Send chunk that exceeds MaxMessageSize=10 → 552.
+	write(t, conn, "BDAT 15 LAST\r\n")
+	write(t, conn, "123456789012345")
+	expectResp(t, scanner, "552")
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
+func TestSMTPBDATRsetResets(t *testing.T) {
+	rec := &bdatRecorder{}
+	conn, scanner, _ := bdatServer(t, rec)
+	bdatSetup(t, conn, scanner)
+
+	// Start a BDAT sequence with non-LAST chunk.
+	sendBdat(t, conn, scanner, 5, false, "Hello")
+
+	// RSET during BDAT sequence — abandons accumulated data.
+	sendAndExpect(t, conn, scanner, "RSET\r\n", "250")
+
+	// New transaction works.
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s2@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r2@t>\r\n", "250")
+	sendBdat(t, conn, scanner, 3, true, "Hi!")
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+
+	// Handler received body from the second transaction, not the first.
+	rec.mu.Lock()
+	if string(rec.lastBody) != "Hi!" {
+		t.Errorf("body = %q, want %q (RSET should have discarded first chunk)", string(rec.lastBody), "Hi!")
+	}
+	rec.mu.Unlock()
+}
+
+func TestSMTPBDATRejectsCommandsDuringSequence(t *testing.T) {
+	conn, scanner, _ := bdatServer(t, &acceptAllHandler{})
+	bdatSetup(t, conn, scanner)
+
+	// Send a non-LAST chunk — inBdat is now true.
+	sendBdat(t, conn, scanner, 3, false, "ABC")
+
+	// Commands other than BDAT, RSET, NOOP, QUIT are rejected.
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s2@t>\r\n", "503")
+	sendAndExpect(t, conn, scanner, "NOOP\r\n", "250") // allowed
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r2@t>\r\n", "503")
+
+	// RSET to exit BDAT sequence.
+	sendAndExpect(t, conn, scanner, "RSET\r\n", "250")
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
+func TestSMTPBDATMultipleSessions(t *testing.T) {
+	// Verify BDAT interleaves cleanly across separate transactions on one connection.
+	rec := &bdatRecorder{}
+	conn, scanner, _ := bdatServer(t, rec)
+	bdatSetup(t, conn, scanner)
+
+	// First transaction.
+	sendBdat(t, conn, scanner, 4, true, "One!")
+	rec.mu.Lock()
+	if string(rec.lastBody) != "One!" {
+		t.Errorf("first body = %q", string(rec.lastBody))
+	}
+	rec.mu.Unlock()
+
+	// Second transaction on same connection.
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
+	sendBdat(t, conn, scanner, 4, true, "Two!")
+
+	rec.mu.Lock()
+	if string(rec.lastBody) != "Two!" {
+		t.Errorf("second body = %q", string(rec.lastBody))
+	}
+	rec.mu.Unlock()
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
 }

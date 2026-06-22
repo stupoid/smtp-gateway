@@ -2,6 +2,7 @@ package smtpgateway
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -710,6 +711,90 @@ func TestDefaultHostname(t *testing.T) {
 	h := defaultHostname()
 	if h == "" {
 		t.Error("defaultHostname returned empty string")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BDAT helpers
+// ---------------------------------------------------------------------------
+
+func TestParseBdatArgs(t *testing.T) {
+	tests := []struct {
+		args     string
+		wantSize int
+		wantLast bool
+		wantErr  bool
+	}{
+		{"1024", 1024, false, false},
+		{"1024 LAST", 1024, true, false},
+		{"0", 0, false, false},
+		{"0 LAST", 0, true, false},
+		{"", 0, false, true},
+		{"abc", 0, false, true},
+		{"-1", 0, false, true},
+		{"100 LAST extra", 0, false, true},
+		{"100 extra", 0, false, true},
+	}
+	for _, tc := range tests {
+		size, last, err := parseBdatArgs(tc.args)
+		if tc.wantErr {
+			if !errors.Is(err, ErrBadSyntax) {
+				t.Errorf("parseBdatArgs(%q) err = %v, want ErrBadSyntax", tc.args, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseBdatArgs(%q) unexpected error: %v", tc.args, err)
+			continue
+		}
+		if size != tc.wantSize {
+			t.Errorf("parseBdatArgs(%q) size = %d, want %d", tc.args, size, tc.wantSize)
+		}
+		if last != tc.wantLast {
+			t.Errorf("parseBdatArgs(%q) last = %v, want %v", tc.args, last, tc.wantLast)
+		}
+	}
+}
+
+func TestReadNBytes(t *testing.T) {
+	srv, cli := net.Pipe()
+	defer func() { _ = srv.Close() }()
+	defer func() { _ = cli.Close() }()
+
+	payload := []byte("raw binary data \x00\x01\x02\xFF")
+	go func() {
+		_, _ = cli.Write(payload)
+		_ = cli.Close()
+	}()
+
+	c := &connState{netConn: srv}
+	got, err := readNBytes(bufio.NewReader(srv), len(payload), c, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Errorf("readNBytes = %v, want %v", got, payload)
+	}
+}
+
+func TestReadNBytesZero(t *testing.T) {
+	got, err := readNBytes(nil, 0, nil, 0)
+	if err != nil {
+		t.Fatalf("zero read should not error: %v", err)
+	}
+	if got != nil {
+		t.Errorf("zero read should return nil, got %v", got)
+	}
+}
+
+func TestReadNBytesEOF(t *testing.T) {
+	srv, cli := net.Pipe()
+	_ = cli.Close()
+
+	c := &connState{netConn: srv}
+	_, err := readNBytes(bufio.NewReader(srv), 10, c, 0)
+	if err == nil {
+		t.Error("expected error reading from closed conn")
 	}
 }
 

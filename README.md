@@ -279,7 +279,7 @@ needs mutable state.
 | SMTPUTF8 | Advertised |
 | SIZE | ✅ (when `MaxMessageSize > 0`) |
 | Graceful shutdown | ✅ |
-| CHUNKING / BDAT (RFC 3030) | Planned |
+| CHUNKING / BDAT (RFC 3030) | ✅ |
 | SMTP AUTH | Not yet |
 
 ## Logging
@@ -344,6 +344,7 @@ srv.Logger = &syslogLogger{}
 | `connection_closed` | Debug | `remote` |
 | `smtp_recv` | Info | `verb`, `args` (truncated) |
 | `data_received` | Info | `bytes`, `mail_from`, `recipients` |
+| `bdat_received` | Info | `bytes`, `mail_from`, `recipients` |
 | `read_error` | Error | `error` |
 | `data_read_error` | Error | `error` |
 | `tls_handshake_error` | Error | `error` |
