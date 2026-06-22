@@ -494,9 +494,10 @@ func (s *Server) handleData(
 		return &Response{451, "4.3.0 Error reading message"}
 	}
 
-	// 8BITMIME check: if the client didn't declare BODY=8BITMIME,
-	// reject 8-bit content per RFC 6152.
-	if !strings.EqualFold(tx.Params["BODY"], "8BITMIME") && contains8Bit(body) {
+	// 8BITMIME check: reject 8-bit content per RFC 6152 unless the
+	// client declared BODY=8BITMIME or SMTPUTF8 (RFC 6531 §3.4).
+	_, smtputf8 := tx.Params["SMTPUTF8"]
+	if !strings.EqualFold(tx.Params["BODY"], "8BITMIME") && !smtputf8 && contains8Bit(body) {
 		resumeCh <- struct{}{}
 		s.logInfo("8bit_rejected",
 			slog.String("mail_from", tx.MailFrom),
@@ -677,11 +678,13 @@ func parseMailFrom(args string) (string, map[string]string, error) {
 	mailFrom := rest[1:closingBracket]
 	rest = strings.TrimSpace(rest[closingBracket+1:])
 
-	// Parse remaining key=value parameters.
+	// Parse remaining key=value parameters and bare keywords (e.g. SMTPUTF8).
 	for _, part := range strings.Fields(rest) {
 		k, v, ok := strings.Cut(part, "=")
 		if ok {
 			params[strings.ToUpper(k)] = v
+		} else {
+			params[strings.ToUpper(part)] = ""
 		}
 	}
 	return mailFrom, params, nil

@@ -276,7 +276,7 @@ needs mutable state.
 | SMTPS (implicit TLS, port 465) | ✅ via `tls.Listener` |
 | 8BITMIME | ✅ with enforcement (rejects 8-bit data without BODY=8BITMIME) |
 | ENHANCEDSTATUSCODES | ✅ |
-| SMTPUTF8 | Advertised |
+| SMTPUTF8 | ✅ |
 | SIZE | ✅ (when `MaxMessageSize > 0`) |
 | Graceful shutdown | ✅ |
 | CHUNKING / BDAT (RFC 3030) | ✅ |

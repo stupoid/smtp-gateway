@@ -95,6 +95,46 @@ func TestParseMailFrom_WithParams(t *testing.T) {
 	}
 }
 
+func TestParseMailFrom_SMTPUTF8(t *testing.T) {
+	// SMTPUTF8 is a bare keyword (no value), not key=value like SIZE=1024.
+	from, params, err := parseMailFrom("FROM:<a@b> SMTPUTF8")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if from != "a@b" {
+		t.Errorf("from = %q, want a@b", from)
+	}
+	if _, ok := params["SMTPUTF8"]; !ok {
+		t.Error("SMTPUTF8 keyword not captured")
+	}
+}
+
+func TestParseMailFrom_SMTPUTF8WithSize(t *testing.T) {
+	from, params, err := parseMailFrom("FROM:<a@b> SMTPUTF8 SIZE=5000")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := params["SMTPUTF8"]; !ok {
+		t.Error("SMTPUTF8 keyword not captured")
+	}
+	if params["SIZE"] != "5000" {
+		t.Errorf("SIZE = %q, want 5000", params["SIZE"])
+	}
+	if from != "a@b" {
+		t.Errorf("from = %q, want a@b", from)
+	}
+}
+
+func TestParseMailFrom_UTF8Address(t *testing.T) {
+	from, _, err := parseMailFrom("FROM:<üser@münchen.de>")
+	if err != nil {
+		t.Fatalf("UTF-8 address should be valid: %v", err)
+	}
+	if from != "üser@münchen.de" {
+		t.Errorf("from = %q, want üser@münchen.de", from)
+	}
+}
+
 func TestParseMailFrom_Errors(t *testing.T) {
 	tests := []string{
 		"",          // empty

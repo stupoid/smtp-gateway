@@ -993,6 +993,156 @@ func TestSMTPShutdownDuringTransaction(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// SMTPUTF8 (RFC 6531)
+// ---------------------------------------------------------------------------
+
+// utf8Handler records the body and sender for verification.
+type utf8Handler struct {
+	mu         sync.Mutex
+	lastBody   []byte
+	lastSender string
+}
+
+func (h *utf8Handler) Hello(_ context.Context, _ *Tx) *Response          { return RespHelloOK }
+func (h *utf8Handler) MailFrom(_ context.Context, tx *Tx) *Response      { return RespMailOK }
+func (h *utf8Handler) RcptTo(_ context.Context, _ *Tx) *Response         { return RespRcptOK }
+func (h *utf8Handler) Data(_ context.Context, tx *Tx, body []byte) *Response {
+	h.mu.Lock()
+	h.lastBody = append([]byte{}, body...)
+	h.lastSender = tx.MailFrom
+	h.mu.Unlock()
+	return RespDataOK
+}
+
+func TestSMTPUTF8Accepts8BitBody(t *testing.T) {
+	// With SMTPUTF8 declared, 8-bit content must be accepted even without
+	// BODY=8BITMIME (RFC 6531 §3.4).
+	h := &utf8Handler{}
+	srv := &Server{
+		Hostname:    "test.local",
+		Handler:     h,
+		ReadTimeout: 5 * time.Second,
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+
+	conn, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	scanner := bufio.NewScanner(conn)
+	_ = readResp(t, scanner)
+
+	sendAndExpect(t, conn, scanner, "EHLO client\r\n", "250")
+	_ = readMultiline(t, scanner)
+
+	// Declare SMTPUTF8 but NOT BODY=8BITMIME.
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t> SMTPUTF8\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "DATA\r\n", "354")
+
+	// Send 8-bit content (byte 0xFF).
+	write(t, conn, "Subject: test\r\n\r\n\xFF\x80\r\n.\r\n")
+	expectResp(t, scanner, "250")
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+
+	h.mu.Lock()
+	if !bytes.Contains(h.lastBody, []byte{0xFF}) {
+		t.Error("8-bit body content was lost")
+	}
+	h.mu.Unlock()
+}
+
+func TestSMTPUTF8Without8BitBody(t *testing.T) {
+	// Without SMTPUTF8 or BODY=8BITMIME, 8-bit content is rejected.
+	srv := &Server{
+		Hostname:    "test.local",
+		Handler:     &acceptAllHandler{},
+		ReadTimeout: 5 * time.Second,
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+
+	conn, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	scanner := bufio.NewScanner(conn)
+	_ = readResp(t, scanner)
+
+	sendAndExpect(t, conn, scanner, "EHLO client\r\n", "250")
+	_ = readMultiline(t, scanner)
+
+	// No SMTPUTF8, no BODY=8BITMIME.
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "DATA\r\n", "354")
+
+	// 8-bit content should be rejected.
+	write(t, conn, "\xFF\r\n.\r\n")
+	expectResp(t, scanner, "550") // 5.6.3
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
+func TestSMTPUTF8AddressesEndToEnd(t *testing.T) {
+	// UTF-8 characters in envelope addresses should survive the round-trip.
+	h := &utf8Handler{}
+	srv := &Server{
+		Hostname:    "mx.münchen.de", // server hostname with UTF-8
+		Handler:     h,
+		ReadTimeout: 5 * time.Second,
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+
+	conn, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	scanner := bufio.NewScanner(conn)
+	_ = readResp(t, scanner)
+
+	sendAndExpect(t, conn, scanner, "EHLO client\r\n", "250")
+	_ = readMultiline(t, scanner)
+
+	// MAIL FROM with UTF-8 sender.
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<üser@münchen.de> SMTPUTF8\r\n", "250")
+	// RCPT TO with UTF-8 recipient.
+	sendAndExpect(t, conn, scanner, "RCPT TO:<rcpt@münchen.de>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "DATA\r\n", "354")
+	write(t, conn, "Subject: Grüß Gott\r\n\r\nHällo Wörld\r\n.\r\n")
+	expectResp(t, scanner, "250")
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+
+	h.mu.Lock()
+	if h.lastSender != "üser@münchen.de" {
+		t.Errorf("sender = %q, want üser@münchen.de", h.lastSender)
+	}
+	if !bytes.Contains(h.lastBody, []byte("Grüß Gott")) {
+		t.Error("UTF-8 subject was lost")
+	}
+	h.mu.Unlock()
+}
+
+// ---------------------------------------------------------------------------
 // BDAT / CHUNKING (RFC 3030)
 // ---------------------------------------------------------------------------
 
