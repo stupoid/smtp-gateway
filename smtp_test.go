@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -472,7 +473,7 @@ func drainML(rw *bufio.ReadWriter) error {
 }
 
 func itoa(i int) string {
-	return fmt.Sprintf("%d", i)
+	return strconv.Itoa(i)
 }
 
 // ---------------------------------------------------------------------------
@@ -1002,7 +1003,7 @@ func TestPostcatParseNoTimestamp(t *testing.T) {
 	dir := t.TempDir()
 	// Write a file manually with only S and R records (no T).
 	path := filepath.Join(dir, "notimestamp.eml")
-	if err := os.WriteFile(path, []byte("S sender@t\nR rcpt@t\n\nbody\r\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("S sender@t\nR rcpt@t\n\nbody\r\n"), 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	msg, err := postcat.Parse(path)

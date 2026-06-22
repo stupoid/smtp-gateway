@@ -13,6 +13,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -53,10 +54,10 @@ func replay(addr, path string) error {
 	}
 
 	if len(msg.Recipients) == 0 {
-		return fmt.Errorf("no recipients in postcat file")
+		return errors.New("no recipients in postcat file")
 	}
 	if len(msg.RawMessage) == 0 {
-		return fmt.Errorf("empty body in postcat file")
+		return errors.New("empty body in postcat file")
 	}
 
 	conn, err := net.Dial("tcp", addr)

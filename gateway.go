@@ -6,6 +6,7 @@ package smtpgateway
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -197,7 +198,7 @@ func Slog(l *slog.Logger) Logger {
 // a tls.Listener before passing it to Serve.
 func (s *Server) Serve(ln net.Listener) error {
 	if s.Handler == nil {
-		return fmt.Errorf("smtpgateway: Handler is nil")
+		return errors.New("smtpgateway: Handler is nil")
 	}
 	s.ln = ln
 	s.ctx, s.cancel = context.WithCancel(context.Background())

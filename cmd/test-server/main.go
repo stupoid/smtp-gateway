@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -30,22 +31,26 @@ func (h *acceptAllHandler) Data(_ context.Context, _ *smtpgateway.Tx, _ []byte) 
 }
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: test-server <listen-addr> <postcat-dir>\n")
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
+	}
+}
+
+func run() error {
+	if len(os.Args) < 2 {
+		return errors.New("usage: test-server <listen-addr> <postcat-dir>")
 	}
 	addr := os.Args[1]
 	postcatDir := os.Args[2]
 
-	if err := os.MkdirAll(postcatDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "mkdir %s: %v\n", postcatDir, err)
-		os.Exit(1)
+	if err := os.MkdirAll(postcatDir, 0750); err != nil {
+		return fmt.Errorf("mkdir %s: %w", postcatDir, err)
 	}
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "listen: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("listen: %w", err)
 	}
 	defer func() { _ = ln.Close() }()
 
@@ -71,8 +76,5 @@ func main() {
 		_ = srv.Shutdown(ctx)
 	}()
 
-	if err := srv.Serve(ln); err != nil {
-		fmt.Fprintf(os.Stderr, "serve: %v\n", err)
-		os.Exit(1)
-	}
+	return srv.Serve(ln)
 }

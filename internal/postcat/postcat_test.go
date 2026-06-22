@@ -119,7 +119,7 @@ func TestParseNoTimestamp(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "no-timestamp.eml")
 	content := "S sender@t.com\nR rcpt@t.com\n\nbody\r\n"
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -142,7 +142,7 @@ func TestParseMissingSender(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "missing-sender.eml")
 	content := "R rcpt@t.com\n\nbody\r\n"
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -160,7 +160,7 @@ func TestParseExtraRecordsIgnored(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "extra-records.eml")
 	content := "S sender@t.com\nH X-Extra: value\nR rcpt@t.com\n\nbody\r\n"
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -179,7 +179,7 @@ func TestParseExtraRecordsIgnored(t *testing.T) {
 func TestParseEmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.eml")
-	if err := os.WriteFile(path, []byte{}, 0644); err != nil {
+	if err := os.WriteFile(path, []byte{}, 0600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 

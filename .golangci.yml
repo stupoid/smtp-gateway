@@ -2,13 +2,40 @@ version: "2"
 
 linters:
   enable:
+    # correctness
     - errcheck
     - govet
     - ineffassign
     - staticcheck
     - unused
+    - bidichk
+    - durationcheck
+    - errname
+    - errorlint
+    - forcetypeassert
+    - gocheckcompilerdirectives
+    - gocritic
+    - gosec
+    - makezero
+    - nilerr
+    - nilnil
+    - unconvert
+    - wastedassign
+    # style
+    - dupword
+    - goconst
+    - goprintffuncname
+    - iface
+    - mirror
     - misspell
+    - perfsprint
+    - prealloc
+    - predeclared
     - revive
+    - usestdlibvars
+    - whitespace
+    # test
+    - thelper
   settings:
     misspell:
       locale: UK
@@ -20,6 +47,21 @@ linters:
         - name: range
         - name: superfluous-else
         - name: unreachable-code
+    goconst:
+      min-occurrences: 6
+    perfsprint:
+      int-conversion: false
+      err-error: true
+      errorf: true
+      sprintf1: true
+    gosec:
+      excludes:
+        - G402  # TLS MinVersion/InsecureSkipVerify — test helpers with self-signed certs
+        - G304  # file inclusion via variable — postcat paths from configured dir
+      config:
+        G301: "0750"
+        G302: "0600"
+        G306: "0600"
 
 formatters:
   enable:
