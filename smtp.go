@@ -311,6 +311,15 @@ var ErrBadSyntax = errors.New("bad SMTP command syntax")
 
 // --- Command handlers ---
 
+// bodyReadTimeout returns the timeout for reading message bodies (DATA and
+// BDAT chunks).  Falls back to 5 minutes when s.ReadTimeout is zero.
+func (s *Server) bodyReadTimeout() time.Duration {
+	if s.ReadTimeout > 0 {
+		return s.ReadTimeout
+	}
+	return 5 * time.Minute
+}
+
 func (s *Server) handleHelo(
 	_ *connState, cmd smtpCmd, tx *Tx, gotHelo bool,
 ) (*Response, bool) {
@@ -524,10 +533,7 @@ func (s *Server) handleData(
 	if err := conn.write(RespStartMail.String(), s.WriteTimeout); err != nil {
 		return &Response{451, "4.3.0 System error"}
 	}
-	bodyReadTimeout := s.ReadTimeout
-	if bodyReadTimeout <= 0 {
-		bodyReadTimeout = 5 * time.Minute
-	}
+	bodyReadTimeout := s.bodyReadTimeout()
 
 	body, err := readDotUnstuffed(
 		conn.r, s.MaxMessageSize,
@@ -632,11 +638,7 @@ func (s *Server) handleBdat(
 
 	// Apply a read deadline for chunk reads so a slow client doesn't
 	// block the worker goroutine indefinitely.
-	bodyReadTimeout := s.ReadTimeout
-	if bodyReadTimeout <= 0 {
-		bodyReadTimeout = 5 * time.Minute
-	}
-
+	bodyReadTimeout := s.bodyReadTimeout()
 	// discardChunk drains `size` raw bytes from the connection to keep the
 	// protocol stream synchronised on rejection.  Uses io.CopyN so the
 	// buffer is fixed-size regardless of the declared chunk size — a
