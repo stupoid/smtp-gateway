@@ -213,6 +213,59 @@ func TestWriteUnixTimestampFilename(t *testing.T) {
 	}
 }
 
+func TestParseCRLFBlankLineSeparator(t *testing.T) {
+	// Verify that Parse correctly handles a file whose envelope records
+	// use \r\n line endings (e.g. produced by an external tool on
+	// Windows).  The blank line separator is \r\n\r\n (4 bytes) and
+	// the body must NOT start with extra \r\n.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crlf.eml")
+
+	// Envelope with CRLF endings, CRLF blank line, then body.
+	content := "S sender@t.com\r\nR rcpt@t.com\r\n\r\nbody line 1\r\nbody line 2\r\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	msg, err := Parse(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	// Sender must NOT have trailing \r.
+	if msg.Sender != "sender@t.com" {
+		t.Errorf("Sender = %q, want %q (trailing \\r?)", msg.Sender, "sender@t.com")
+	}
+	// Body must NOT start with \r\n.
+	wantBody := "body line 1\r\nbody line 2\r\n"
+	if string(msg.RawMessage) != wantBody {
+		t.Errorf("RawMessage = %q, want %q", string(msg.RawMessage), wantBody)
+	}
+}
+
+func TestParseLFBlankLineSeparator(t *testing.T) {
+	// Sanity check: the normal LF path still works (Write produces LF).
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lf.eml")
+
+	content := "S sender@t.com\nR rcpt@t.com\n\nbody line 1\r\nbody line 2\r\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	msg, err := Parse(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if msg.Sender != "sender@t.com" {
+		t.Errorf("Sender = %q, want %q", msg.Sender, "sender@t.com")
+	}
+	wantBody := "body line 1\r\nbody line 2\r\n"
+	if string(msg.RawMessage) != wantBody {
+		t.Errorf("RawMessage = %q, want %q", string(msg.RawMessage), wantBody)
+	}
+}
+
 func TestWritePreservesTimestamp(t *testing.T) {
 	dir := t.TempDir()
 

@@ -86,15 +86,17 @@ func Parse(path string) (*Message, error) {
 	m := &Message{}
 
 	// Find the blank line separator between envelope and body.
-	sepIdx := findBlankLine(raw)
+	sepIdx, sepLen := findBlankLine(raw)
 	if sepIdx < 0 {
 		// No blank line separator; the file has no body.
 		return m, nil
 	}
 
-	// Parse envelope records line by line.
+	// Parse envelope records line by line.  Trim \r so both LF and
+	// CRLF line endings are handled correctly.
 	envelope := string(raw[:sepIdx])
 	for _, line := range strings.Split(envelope, "\n") {
+		line = strings.TrimSuffix(line, "\r")
 		switch {
 		case strings.HasPrefix(line, "S "):
 			m.Sender = line[2:]
@@ -110,24 +112,25 @@ func Parse(path string) (*Message, error) {
 	}
 
 	// Body is everything after the blank line separator.
-	m.RawMessage = raw[sepIdx+2:] // skip "\n\n"
+	m.RawMessage = raw[sepIdx+sepLen:]
 	return m, nil
 }
 
-// findBlankLine returns the byte index of "\n\n" in b, or -1 if not found.
-func findBlankLine(b []byte) int {
+// findBlankLine returns the byte index of the blank line separator and its
+// length (2 for "\n\n", 4 for "\r\n\r\n"), or (-1, 0) if not found.
+func findBlankLine(b []byte) (int, int) {
 	for i := 0; i < len(b)-1; i++ {
 		if b[i] == '\n' && b[i+1] == '\n' {
-			return i
+			return i, 2
 		}
 	}
 	// Also accept "\r\n\r\n" (CRLF blank line).
 	for i := 0; i < len(b)-3; i++ {
 		if b[i] == '\r' && b[i+1] == '\n' && b[i+2] == '\r' && b[i+3] == '\n' {
-			return i
+			return i, 4
 		}
 	}
-	return -1
+	return -1, 0
 }
 
 // FormatNullSender returns "<>" for an empty or null sender, or the sender
