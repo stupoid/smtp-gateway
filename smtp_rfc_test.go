@@ -1332,6 +1332,26 @@ func TestSMTPBDATBeforeRcpt(t *testing.T) {
 	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
 }
 
+func TestSMTPBDATBeforeHelo(t *testing.T) {
+	// BDAT before any HELO/EHLO — the server must reject with 503 and
+	// NOT allocate memory proportional to the declared chunk size.
+	// discardChunk must drain the declared bytes without a giant allocation.
+	conn, scanner, _ := bdatServer(t, &acceptAllHandler{})
+
+	// BDAT with non-zero size before HELO — 503, connection stays usable.
+	sendAndExpect(t, conn, scanner, "BDAT 100 LAST\r\n", "503")
+
+	// Connection is still alive; a normal transaction works.
+	sendAndExpect(t, conn, scanner, "EHLO t\r\n", "250")
+	_ = readMultiline(t, scanner)
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "DATA\r\n", "354")
+	write(t, conn, "body\r\n.\r\n")
+	expectResp(t, scanner, "250")
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
 func TestSMTPBDATNoAcceptedRecipients(t *testing.T) {
 	conn, scanner, _ := bdatServer(t, &rejectRcptHandler{})
 

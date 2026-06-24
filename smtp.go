@@ -637,11 +637,17 @@ func (s *Server) handleBdat(
 		bodyReadTimeout = 5 * time.Minute
 	}
 
-	// discardChunk reads and discards `size` raw bytes from the connection
-	// to keep the protocol stream synchronised on rejection.
+	// discardChunk drains `size` raw bytes from the connection to keep the
+	// protocol stream synchronised on rejection.  Uses io.CopyN so the
+	// buffer is fixed-size regardless of the declared chunk size — a
+	// client that sends BDAT <huge> before HELO must not trigger a
+	// proportional allocation.
 	discardChunk := func() {
 		if size > 0 {
-			if _, discErr := readNBytes(conn.r, size, conn, bodyReadTimeout); discErr != nil {
+			if bodyReadTimeout > 0 {
+				conn.SetReadDeadline(time.Now().Add(bodyReadTimeout))
+			}
+			if _, discErr := io.CopyN(io.Discard, conn.r, int64(size)); discErr != nil {
 				s.logError("bdat_read_error", slog.String("error", discErr.Error()))
 			}
 		}
