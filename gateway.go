@@ -290,9 +290,9 @@ func (s *Server) logError(msg string, args ...any) {
 }
 
 func defaultHostname() string {
-	h, err := net.LookupAddr("127.0.0.1")
-	if err == nil && len(h) > 0 {
-		return h[0]
+	h, err := os.Hostname()
+	if err == nil && h != "" {
+		return h
 	}
 	return "localhost"
 }

@@ -698,10 +698,8 @@ func TestDefaultHostname(t *testing.T) {
 	if h == "" {
 		t.Error("defaultHostname returned empty string")
 	}
-	// Must be either "localhost" or a valid-looking hostname (contains a dot).
-	if h != "localhost" && !strings.Contains(h, ".") {
-		t.Errorf("defaultHostname returned unexpected value: %q", h)
-	}
+	// os.Hostname() returns the kernel hostname, which is always valid.
+	// Short names (e.g. "nixos") are fine — no requirement for a dot.
 }
 
 // ---------------------------------------------------------------------------
