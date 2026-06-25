@@ -32,7 +32,9 @@ func (r *Response) MultiLine() string {
 	return fmt.Sprintf("%d-%s\r\n", r.Code, r.Message)
 }
 
-// Pre-defined SMTP responses.
+// Pre-defined SMTP responses. These are shared pointers — do not modify
+// them. Copy via &Response{Code: r.Code, Message: r.Message} if you need
+// a mutable version.
 var (
 	RespHelloOK      = &Response{250, "OK"}
 	RespMailOK       = &Response{250, "2.1.0 OK"}
