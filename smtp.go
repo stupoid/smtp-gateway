@@ -423,7 +423,8 @@ func (s *Server) handleStartTLS(
 	if err := tlsConn.Handshake(); err != nil {
 		_ = conn.netConn.SetDeadline(time.Time{})
 		s.logError("tls_handshake_error", slog.String("error", err.Error()))
-		return &Response{454, "4.7.0 TLS handshake failed"}, false
+		_ = conn.Close()
+		return nil, false
 	}
 	_ = conn.netConn.SetDeadline(time.Time{})
 	conn.netConn = tlsConn
