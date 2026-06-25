@@ -582,12 +582,10 @@ func TestSMTPMessageSizeLimitEnforced(t *testing.T) {
 	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
 	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
 	sendAndExpect(t, conn, scanner, "DATA\r\n", "354")
-	// Send enough bytes to exceed MaxMessageSize=3.
-	// readDotUnstuffed stops reading after the limit, so don't send
-	// a terminating dot — it would be read as a stray command.
-	write(t, conn, "abcdefgh\r\n")
-
-	// Body > 3 bytes → 552
+	// Body exceeds MaxMessageSize=3. The drain loop in readDotUnstuffed
+	// consumes the entire body including the terminating dot before
+	// returning ErrMessageTooLarge, so the protocol stays synchronised.
+	write(t, conn, "abcdefgh\r\n.\r\n")
 	expectResp(t, scanner, "552")
 	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
 }
