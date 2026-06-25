@@ -138,11 +138,13 @@ func formatSender(sender string) string {
 }
 
 // sendBody writes the raw message to conn with dot-stuffing and a
-// terminating dot line.
+// terminating dot line. It normalises both \r\n and bare \n line
+// endings so bodies from non-conforming sources are replayed correctly.
 func sendBody(conn net.Conn, body []byte) error {
-	lines := strings.Split(string(body), "\r\n")
-	// If body ends with \r\n, strings.Split produces an empty trailing
-	// element that we should not emit as a line.
+	// Normalise CRLF to LF, then split on LF. This handles \r\n, bare \n,
+	// and mixed line endings.
+	normalised := strings.ReplaceAll(string(body), "\r\n", "\n")
+	lines := strings.Split(normalised, "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
 	}
