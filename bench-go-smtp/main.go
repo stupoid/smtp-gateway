@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -76,9 +75,6 @@ func (s *postcatSession) Data(r io.Reader) error {
 	if _, err := f.Write(s.data); err != nil {
 		f.Close()
 		return err
-	}
-	if !bytes.HasSuffix(s.data, []byte{'\n'}) {
-		f.WriteString("\n")
 	}
 	if err := f.Close(); err != nil {
 		return err
