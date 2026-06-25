@@ -38,7 +38,7 @@ func main() {
 }
 
 func run() error {
-	if len(os.Args) < 2 {
+	if len(os.Args) < 3 {
 		return errors.New("usage: test-server <listen-addr> <postcat-dir>")
 	}
 	addr := os.Args[1]
