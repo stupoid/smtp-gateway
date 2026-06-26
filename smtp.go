@@ -75,6 +75,18 @@ func (s *Server) handleConn(netConn net.Conn) {
 	conn.ctx = connCtx
 	defer connCancel()
 
+	// When the connection context is cancelled (e.g. server shutdown),
+	// close the underlying net.Conn after a brief grace period.  If the
+	// worker is in the select loop it will notice conn.ctx.Done(), send
+	// a 421, and return before the close fires.  If it is stuck inside a
+	// body read (readDotUnstuffed) or TLS handshake, the close unblocks
+	// the read/write immediately so Shutdown doesn't hang.
+	go func() {
+		<-connCtx.Done()
+		time.Sleep(50 * time.Millisecond)
+		_ = conn.netConn.Close()
+	}()
+
 	defer func() {
 		if r := recover(); r != nil {
 			s.logError("handler_panic", slog.Any("panic", r))
@@ -207,6 +219,9 @@ func (s *Server) readCommands(
 	resumeCh <-chan struct{},
 ) {
 	defer func() {
+		if r := recover(); r != nil {
+			s.logError("reader_panic", slog.Any("panic", r))
+		}
 		close(events)
 	}()
 
