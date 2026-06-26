@@ -75,6 +75,7 @@ func Write(dir, mailFrom string, accepted []string, body []byte) (string, error)
 		return path, fmt.Errorf("flush postcat file: %w", err)
 	}
 	if err := f.Sync(); err != nil {
+		_ = f.Close()
 		return path, fmt.Errorf("sync postcat file: %w", err)
 	}
 	if err := f.Close(); err != nil {
