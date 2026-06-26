@@ -415,11 +415,7 @@ func (s *Server) handleStartTLS(
 	// independent of the SMTP read timeout — 30 seconds is ample.
 	tlsTimeout := 30 * time.Second
 	_ = conn.netConn.SetDeadline(time.Now().Add(tlsTimeout))
-	cfg := s.TLSConfig.Clone()
-	if cfg.MinVersion < tls.VersionTLS12 {
-		cfg.MinVersion = tls.VersionTLS12
-	}
-	tlsConn := tls.Server(conn.netConn, cfg)
+	tlsConn := tls.Server(conn.netConn, s.TLSConfig.Clone())
 	if err := tlsConn.Handshake(); err != nil {
 		_ = conn.netConn.SetDeadline(time.Time{})
 		s.logError("tls_handshake_error", slog.String("error", err.Error()))
