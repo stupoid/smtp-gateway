@@ -120,7 +120,10 @@ cert, _ := tls.LoadX509KeyPair("cert.pem", "key.pem")
 srv := smtpgateway.Server{
 	Hostname:  "mx.example.com",
 	Handler:   handler,
-	TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
+	TLSConfig: &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	},
 }
 
 ln, _ := net.Listen("tcp", ":587")
