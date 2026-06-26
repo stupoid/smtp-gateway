@@ -537,6 +537,9 @@ func (s *Server) handleRcpt(
 	*phase = phaseRcpt
 
 	rcpt := parseRcptTo(cmd.args)
+	if len(rcpt) > 320 || containsControl(rcpt) {
+		return &Response{501, "5.5.2 Invalid recipient address"}
+	}
 	tx.Rcpts = append(tx.Rcpts, rcpt)
 
 	if s.MaxRecipients > 0 && len(tx.Rcpts) > s.MaxRecipients {
@@ -798,6 +801,9 @@ func parseMailFrom(args string) (string, map[string]string, error) {
 		return "", params, ErrBadSyntax
 	}
 	mailFrom := rest[1:closingBracket]
+	if len(mailFrom) > 320 || containsControl(mailFrom) {
+		return "", params, ErrBadSyntax
+	}
 	rest = strings.TrimSpace(rest[closingBracket+1:])
 
 	// Parse remaining key=value parameters and bare keywords (e.g. SMTPUTF8).
@@ -918,6 +924,18 @@ func truncate(s string, n int) string {
 		n--
 	}
 	return s[:n] + "..."
+}
+
+// containsControl reports whether s contains any ASCII control character
+// (0x00-0x1F excluding tab, or 0x7F DEL).
+func containsControl(s string) bool {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 && c != '\t' || c == 0x7F {
+			return true
+		}
+	}
+	return false
 }
 
 // contains8Bit reports whether b contains any byte with the high bit set.

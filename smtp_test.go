@@ -138,11 +138,14 @@ func TestParseMailFrom_UTF8Address(t *testing.T) {
 
 func TestParseMailFrom_Errors(t *testing.T) {
 	tests := []string{
-		"",          // empty
-		"FROM",      // missing colon
-		"FROM:",     // missing angle brackets
-		"FROM:abc",  // no angle brackets
-		"FROM:<abc", // missing closing bracket
+		"",                  // empty
+		"FROM",              // missing colon
+		"FROM:",             // missing angle brackets
+		"FROM:abc",          // no angle brackets
+		"FROM:<abc",         // missing closing bracket
+		"FROM:<\x00>",       // null byte
+		"FROM:<\r\ninject>", // CRLF injection
+		"FROM:<user\x7F@t>", // DEL character
 	}
 	for _, tc := range tests {
 		_, _, err := parseMailFrom(tc)
@@ -675,6 +678,30 @@ func TestTruncate(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("truncate(%q, %d) = %q, want %q", tc.s, tc.n, got, tc.want)
 		}
+	}
+}
+
+func TestContainsControl(t *testing.T) {
+	if containsControl("hello") {
+		t.Error("containsControl returned true for clean string")
+	}
+	if containsControl("") {
+		t.Error("containsControl returned true for empty string")
+	}
+	if !containsControl("\x00") {
+		t.Error("containsControl returned false for null byte")
+	}
+	if !containsControl("\x1F") {
+		t.Error("containsControl returned false for unit separator")
+	}
+	if !containsControl("\x7F") {
+		t.Error("containsControl returned false for DEL")
+	}
+	if !containsControl("a\nb") {
+		t.Error("containsControl returned false for newline")
+	}
+	if containsControl("a\tb") {
+		t.Error("containsControl returned true for tab (should be allowed)")
 	}
 }
 

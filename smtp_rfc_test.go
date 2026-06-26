@@ -489,6 +489,46 @@ func TestSMTPRcptToEdgeCases(t *testing.T) {
 	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
 }
 
+func TestSMTPRcptToControlChars(t *testing.T) {
+	conn, scanner := dialServer(t)
+
+	sendAndExpect(t, conn, scanner, "EHLO mx\r\n", "250")
+	_ = readMultiline(t, scanner)
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+
+	// Null byte in bracketed address.
+	sendAndExpect(t, conn, scanner, "RCPT TO:<\x00@t>\r\n", "501")
+
+	// DEL in bracketed address.
+	sendAndExpect(t, conn, scanner, "RCPT TO:<user\x7F@t>\r\n", "501")
+
+	// Bare address with control char.
+	sendAndExpect(t, conn, scanner, "RCPT TO:bad\x01addr\r\n", "501")
+
+	// Clean recipient — still accepted.
+	sendAndExpect(t, conn, scanner, "RCPT TO:<clean@t>\r\n", "250")
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
+func TestSMTPMailFromControlChars(t *testing.T) {
+	conn, scanner := dialServer(t)
+
+	sendAndExpect(t, conn, scanner, "EHLO mx\r\n", "250")
+	_ = readMultiline(t, scanner)
+
+	// Null byte in sender.
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<\x00@t>\r\n", "501")
+
+	// DEL in sender.
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<evil\x7F@t>\r\n", "501")
+
+	// Clean sender still works after rejections.
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<clean@t>\r\n", "250")
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
 // ---------------------------------------------------------------------------
 // MAIL FROM parameter handling
 // ---------------------------------------------------------------------------
