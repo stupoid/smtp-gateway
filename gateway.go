@@ -151,7 +151,12 @@ type Server struct {
 
 	// MaxMessageSize is the maximum message size in bytes.
 	// Defaults to 25 MiB.  SIZE is advertised in EHLO and messages
-	// exceeding the limit are rejected during DATA.
+	// exceeding the limit are rejected during DATA and BDAT.
+	//
+	// Setting this to 0 disables the limit entirely — there is no
+	// secondary safety net.  Without a limit, a single BDAT chunk
+	// can trigger an allocation proportional to the client-declared
+	// chunk size.
 	MaxMessageSize int
 
 	// MaxRecipients is the maximum number of RCPT TO commands
@@ -159,6 +164,10 @@ type Server struct {
 	MaxRecipients int
 
 	// MaxConnections limits concurrent connections.  0 means unlimited.
+	//
+	// Without a limit, an attacker can exhaust file descriptors and
+	// goroutine memory by opening many idle connections.  Set a limit
+	// appropriate for your deployment.
 	MaxConnections int
 
 	// ReadTimeout is the per-line read deadline.  Defaults to 5 minutes.
