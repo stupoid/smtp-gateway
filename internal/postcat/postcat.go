@@ -25,16 +25,20 @@ type Message struct {
 // Write writes an accepted message to dir.  The file is named
 // <unix-timestamp>-<nanosecond>.eml and contains envelope records
 // followed by a blank line and the raw message.
+//
+// The write is atomic: data is written to a temporary file and renamed
+// into place on success.  This prevents both partial-file artefacts and
+// filename collisions under concurrent writes.
 func Write(dir, mailFrom string, accepted []string, body []byte) (string, error) {
 	now := time.Now()
 	name := fmt.Sprintf("%d-%d.eml", now.Unix(), now.Nanosecond())
 	path := filepath.Join(dir, name)
 
-	f, err := os.Create(path)
+	f, err := os.CreateTemp(dir, "."+name+"-*")
 	if err != nil {
-		return path, fmt.Errorf("create postcat file: %w", err)
+		return path, fmt.Errorf("create postcat temp file: %w", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func() { _ = os.Remove(f.Name()) }()
 
 	w := bufio.NewWriter(f)
 
@@ -62,11 +66,18 @@ func Write(dir, mailFrom string, accepted []string, body []byte) (string, error)
 	}
 
 	if err := w.Flush(); err != nil {
-		// Remove the incomplete file so downstream consumers don't see
-		// a truncated artefact.
 		_ = f.Close()
-		_ = os.Remove(path)
 		return path, fmt.Errorf("flush postcat file: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		return path, fmt.Errorf("sync postcat file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return path, fmt.Errorf("close postcat file: %w", err)
+	}
+
+	if err := os.Rename(f.Name(), path); err != nil {
+		return path, fmt.Errorf("rename postcat file: %w", err)
 	}
 	return path, nil
 }
