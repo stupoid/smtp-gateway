@@ -49,13 +49,15 @@ go vet ./...
 
 ## Architecture
 
-### Per-connection model: two goroutines
+### Per-connection model: three goroutines
 
-Each accepted connection spawns two goroutines inside `handleConn` (`smtp.go`):
+Each accepted connection spawns three goroutines inside `handleConn` (`smtp.go`):
 
 1. **Reader goroutine** (`readCommands`) — reads lines from `conn.r` (`*bufio.Reader`), parses SMTP verbs, sends `smtpCmd{verb, args}` onto a buffered `events` channel (depth 32). This enables RFC 2920 PIPELINING: the reader can read ahead while the worker processes.
 
 2. **Worker loop** — receives from `events` and dispatches to `handleHelo`, `handleEhlo`, `handleMail`, `handleRcpt`, `handleData`, `handleStartTLS`, etc. Responses are written via `conn.write()` which uses a mutex-protected `*bufio.Writer`.
+
+3. **Context watchdog** — blocks on `connCtx.Done()`, then force-closes `netConn` after a 50 ms grace period.  This unblocks the reader and worker if they are stuck in a body read or TLS handshake during Shutdown, preventing Shutdown from hanging until the read timeout expires.
 
 ### Connection takeover: DATA and STARTTLS
 

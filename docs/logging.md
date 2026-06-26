@@ -50,7 +50,7 @@ The `args` are key=value pairs using `slog.String`, `slog.Int`,
 
 | Event | Keys | Meaning |
 |-------|------|---------|
-| `smtp_recv` | `verb` (string), `args` (string, truncated to 120 chars) | Every SMTP command line received |
+| `smtp_recv` | `verb` (string), `args` (string, control characters stripped, truncated to 120 chars) | Every SMTP command line received |
 
 ### Message reception (Info)
 
@@ -74,7 +74,7 @@ The `args` are key=value pairs using `slog.String`, `slog.Int`,
 | `data_read_error` | `error` | Body read failed during DATA |
 | `bdat_read_error` | `error` | Body read failed during BDAT chunk |
 | `postcat_write_error` | `error`, `path` (string) | Failed to persist message to postcat dir |
-| `resume_timeout` | — | Reader waited > bodyReadTimeout + 1 min for worker to finish DATA/STARTTLS/BDAT |
+| `resume_timeout` | — | Reader waited > ReadTimeout + 1 min for worker to finish DATA/STARTTLS/BDAT |
 | `max_connections_reached` | — | New connection rejected because connSem is full |
 
 ### Startup (Info)

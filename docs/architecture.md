@@ -16,7 +16,7 @@ examples/s3/      Example handler that compresses and stores to S3
 
 ## Per-connection goroutine model
 
-Each accepted connection spawns two goroutines:
+Each accepted connection spawns three goroutines:
 
 ```
   net.Conn
@@ -27,11 +27,17 @@ Each accepted connection spawns two goroutines:
      │   - sends smtpCmd{verb, args} to events channel (depth 32)
      │   - pauses on resumeCh during DATA/BDAT/STARTTLS
      │
-     └── Worker loop (handleConn body)
-         - receives from events
-         - dispatches to handleHelo / handleEhlo / handleMail / ...
-         - serial handler callbacks per connection
-         - writes responses via mutex-protected bufio.Writer
+     ├── Worker loop (handleConn body)
+     │   - receives from events
+     │   - dispatches to handleHelo / handleEhlo / handleMail / ...
+     │   - serial handler callbacks per connection
+     │   - writes responses via mutex-protected bufio.Writer
+     │
+     └── Context watchdog
+         - blocks on connCtx.Done()
+         - after 50 ms grace, force-closes netConn
+         - unblocks reader/worker stuck in body read or TLS handshake
+           during Shutdown
 ```
 
 The `events` channel (buffered, depth 32) enables RFC 2920 PIPELINING:
@@ -167,11 +173,17 @@ The CreateTemp + Rename pattern makes writes atomic: readers see either
 the complete file or nothing.  The random suffix prevents collisions
 under concurrent writes.
 
+Postcat writes are **best-effort**: the file is written after the handler
+has already committed (returned 250).  If the write fails (disk full,
+permission denied), the error is logged at Error level but the SMTP
+client still receives 250.  For guaranteed persistence, implement it in
+`Handler.Data`.
+
 ## Shutdown sequence
 
 ```
 Shutdown(ctx)
-  └─ s.cancel()             // cancels s.ctx → all conn.ctx cancelled
+  └─ s.shutdownOnce.Do(s.cancel)  // guards against concurrent calls
        │
        ├─ Worker select loop: conn.ctx.Done() fires → send 421 → return
        ├─ Reader: conn.netConn closed after 50ms grace → ReadString fails

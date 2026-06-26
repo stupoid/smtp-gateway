@@ -216,12 +216,14 @@ Key events: `connection_opened`/`closed` (Debug), `smtp_recv`/`data_received`
 
 ## How it works
 
-Each connection spawns two goroutines:
+Each connection spawns two primary goroutines plus a cleanup goroutine:
 
 1. **Reader** — reads lines, parses SMTP verbs, pushes into a buffered channel
    (depth 32). This enables RFC 2920 PIPELINING.
 2. **Worker** — receives from the channel and dispatches to your handler
    callbacks.
+3. **Cleanup** — waits for server shutdown, then force-closes the connection
+   to unblock stuck reads.
 
 During DATA and STARTTLS the reader **pauses** so the worker can take
 exclusive control of the connection (reading the body, or performing the TLS
