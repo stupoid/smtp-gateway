@@ -424,20 +424,16 @@ func (s *Server) handleEhlo(
 	if s.MaxMessageSize > 0 {
 		ext = append(ext, fmt.Sprintf("SIZE %d", s.MaxMessageSize))
 	}
-	if len(ext) == 1 {
-		_ = conn.write(fmt.Sprintf("250 %s\r\n", ext[0]), s.WriteTimeout)
-	} else {
-		for i, line := range ext {
-			var err error
-			if i == len(ext)-1 {
-				err = conn.write(fmt.Sprintf("250 %s\r\n", line), s.WriteTimeout)
-			} else {
-				err = conn.write(fmt.Sprintf("250-%s\r\n", line), s.WriteTimeout)
-			}
-			if err != nil {
-				s.logError("ehlo_write_error", slog.String("error", err.Error()))
-				return nil, false
-			}
+	for i, line := range ext {
+		var err error
+		if i == len(ext)-1 {
+			err = conn.write(fmt.Sprintf("250 %s\r\n", line), s.WriteTimeout)
+		} else {
+			err = conn.write(fmt.Sprintf("250-%s\r\n", line), s.WriteTimeout)
+		}
+		if err != nil {
+			s.logError("ehlo_write_error", slog.String("error", err.Error()))
+			return nil, false
 		}
 	}
 	return nil, true // already wrote response
