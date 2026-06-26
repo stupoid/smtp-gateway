@@ -169,6 +169,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 					if resp.Code == 250 {
 						phase = phaseInit
 						tx = s.newTx(netConn)
+						conn.bodyBuf = nil
 					}
 				case "BDAT":
 					resp = s.handleBdat(conn, cmd, tx, phase, &inBdat, resumeCh)
