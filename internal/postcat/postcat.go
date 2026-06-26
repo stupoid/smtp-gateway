@@ -7,6 +7,7 @@ package postcat
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -22,6 +23,24 @@ type Message struct {
 	Recipients []string
 	Time       time.Time
 	RawMessage []byte // full RFC 5322 message (headers + body)
+}
+
+// FormatEnvelope returns the complete postcat-format bytes for a message:
+// envelope records (S, R, T lines), a blank separator, and the raw body.
+// This is the single authority for the postcat wire format — use it instead
+// of hand-rolling S/R/T lines so format changes stay in one place.
+func FormatEnvelope(mailFrom string, accepted []string, t time.Time, body []byte) []byte {
+	var buf bytes.Buffer
+
+	fmt.Fprintf(&buf, "S %s\n", sanitizeAddr(FormatNullSender(mailFrom)))
+	for _, rcpt := range accepted {
+		fmt.Fprintf(&buf, "R %s\n", sanitizeAddr(rcpt))
+	}
+	fmt.Fprintf(&buf, "T %s\n", t.Format(time.RFC3339))
+	buf.WriteByte('\n') // envelope/body separator
+	buf.Write(body)
+
+	return buf.Bytes()
 }
 
 // Write writes an accepted message to dir.  The file is named
