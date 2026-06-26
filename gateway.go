@@ -194,6 +194,12 @@ type Server struct {
 	// accepted message as a Postfix-queue-file-compatible file in
 	// this directory (see internal/postcat).  The directory is
 	// created with mode 0750 if it does not exist.
+	//
+	// Postcat writes are best-effort: the file is written after
+	// Handler.Data returns 250.  If the write fails (disk full,
+	// permission denied), the error is logged but the SMTP client
+	// still receives 250 — the handler has already committed.
+	// For guaranteed persistence, implement it in Handler.Data.
 	PostcatDir string
 
 	// --- internal ---
