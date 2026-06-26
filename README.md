@@ -148,7 +148,7 @@ srv.Serve(tls.NewListener(ln, tlsConfig))
 | 8BITMIME | ✅ enforcement |
 | ENHANCEDSTATUSCODES | ✅ |
 | SMTPUTF8 | ✅ |
-| SIZE | ✅ when `MaxMessageSize > 0` |
+| SIZE | ✅ always advertised (default 25 MiB) |
 | CHUNKING / BDAT (RFC 3030) | ✅ |
 | Graceful shutdown | ✅ |
 

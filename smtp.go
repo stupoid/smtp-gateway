@@ -71,7 +71,14 @@ func (s *Server) handleConn(netConn net.Conn) {
 		w:       bufio.NewWriter(netConn),
 	}
 
+	connCtx, connCancel := context.WithCancel(s.ctx)
+	conn.ctx = connCtx
+	defer connCancel()
+
 	defer func() {
+		if r := recover(); r != nil {
+			s.logError("handler_panic", slog.Any("panic", r))
+		}
 		_ = conn.Close()
 		s.logDebug("connection_closed", slog.String("remote", remote))
 	}()
@@ -101,7 +108,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 	)
 
 	// Start the SMTP command reader goroutine.
-	go s.readCommands(s.ctx, conn, events, resumeCh)
+	go s.readCommands(conn, events, resumeCh)
 
 	// Worker loop: process commands sequentially.
 	for {
@@ -140,7 +147,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 						phase = phaseMail
 					}
 				case "RCPT":
-					resp = s.handleRcpt(cmd, tx, &phase, gotHelo)
+					resp = s.handleRcpt(conn, cmd, tx, &phase, gotHelo)
 				case "DATA":
 					resp = s.handleData(conn, cmd, tx, phase, resumeCh)
 					if resp.Code == 250 {
@@ -179,8 +186,8 @@ func (s *Server) handleConn(netConn net.Conn) {
 				}
 			}
 
-		case <-s.ctx.Done():
-			// Server is shutting down; send 421 and close.
+		case <-conn.ctx.Done():
+			// Connection closed or server is shutting down.
 			_ = conn.write("421 4.3.0 Service shutting down\r\n", s.WriteTimeout)
 			return
 		}
@@ -191,7 +198,6 @@ func (s *Server) handleConn(netConn net.Conn) {
 // to events.  During DATA, it pauses so the worker can read the body
 // directly.  After receiving bodyDone, it resumes normal reading.
 func (s *Server) readCommands(
-	ctx context.Context,
 	conn *connState,
 	events chan<- smtpCmd,
 	resumeCh <-chan struct{},
@@ -230,19 +236,22 @@ func (s *Server) readCommands(
 			// (body read or TLS handshake) without the reader racing for bytes.
 			select {
 			case events <- smtpCmd{verb: verb, args: args}:
-			case <-ctx.Done():
+			case <-conn.ctx.Done():
 				return
 			}
 			// Pause until worker signals resume (body read / TLS upgrade done).
 			select {
 			case <-resumeCh:
-			case <-ctx.Done():
+			case <-conn.ctx.Done():
+				return
+			case <-time.After(s.bodyReadTimeout() + time.Minute):
+				s.logError("resume_timeout")
 				return
 			}
 		} else {
 			select {
 			case events <- smtpCmd{verb: verb, args: args}:
-			case <-ctx.Done():
+			case <-conn.ctx.Done():
 				return
 			}
 		}
@@ -310,16 +319,13 @@ var ErrBadSyntax = errors.New("bad SMTP command syntax")
 // --- Command handlers ---
 
 // bodyReadTimeout returns the timeout for reading message bodies (DATA and
-// BDAT chunks).  Falls back to 5 minutes when s.ReadTimeout is zero.
+// BDAT chunks).
 func (s *Server) bodyReadTimeout() time.Duration {
-	if s.ReadTimeout > 0 {
-		return s.ReadTimeout
-	}
-	return 5 * time.Minute
+	return s.ReadTimeout
 }
 
 func (s *Server) handleHelo(
-	_ *connState, cmd smtpCmd, tx *Tx, gotHelo bool,
+	conn *connState, cmd smtpCmd, tx *Tx, gotHelo bool,
 ) (*Response, bool) {
 	if gotHelo {
 		return &Response{503, "5.5.1 HELO already received"}, gotHelo
@@ -328,7 +334,7 @@ func (s *Server) handleHelo(
 	if tx.Helo == "" {
 		return &Response{501, "5.5.2 HELO requires domain"}, false
 	}
-	resp := s.Handler.Hello(s.ctx, tx)
+	resp := s.Handler.Hello(conn.ctx, tx)
 	if resp == nil || resp.Code != 250 {
 		if resp == nil {
 			resp = RespBadSeq
@@ -348,7 +354,7 @@ func (s *Server) handleEhlo(
 	if tx.Helo == "" {
 		return &Response{501, "5.5.2 EHLO requires domain"}, false
 	}
-	resp := s.Handler.Hello(s.ctx, tx)
+	resp := s.Handler.Hello(conn.ctx, tx)
 	if resp == nil || resp.Code != 250 {
 		if resp == nil {
 			resp = RespBadSeq
@@ -472,7 +478,7 @@ func (s *Server) handleMail(
 	}
 	// MaxRecipients is enforced at the RCPT phase.
 
-	resp := s.Handler.MailFrom(s.ctx, tx)
+	resp := s.Handler.MailFrom(conn.ctx, tx)
 	if resp == nil {
 		resp = RespBadSeq
 	}
@@ -480,7 +486,7 @@ func (s *Server) handleMail(
 }
 
 func (s *Server) handleRcpt(
-	cmd smtpCmd, tx *Tx,
+	conn *connState, cmd smtpCmd, tx *Tx,
 	phase *int, gotHelo bool,
 ) *Response {
 	if !gotHelo {
@@ -498,7 +504,7 @@ func (s *Server) handleRcpt(
 		return &Response{452, "4.5.3 Too many recipients"}
 	}
 
-	resp := s.Handler.RcptTo(s.ctx, tx)
+	resp := s.Handler.RcptTo(conn.ctx, tx)
 	if resp != nil && resp.Code == 250 {
 		tx.Accepted = append(tx.Accepted, rcpt)
 	} else {
@@ -561,7 +567,7 @@ func (s *Server) handleData(
 		slog.Int("recipients", len(tx.Accepted)),
 	)
 
-	resp := s.Handler.Data(s.ctx, tx, body)
+	resp := s.Handler.Data(conn.ctx, tx, body)
 	if resp == nil {
 		resp = RespBadSeq
 	}
@@ -700,7 +706,7 @@ func (s *Server) handleBdat(
 		slog.Int("recipients", len(tx.Accepted)),
 	)
 
-	resp := s.Handler.Data(s.ctx, tx, conn.bodyBuf)
+	resp := s.Handler.Data(conn.ctx, tx, conn.bodyBuf)
 	if resp == nil {
 		resp = RespBadSeq
 	}
@@ -782,8 +788,9 @@ type connState struct {
 	netConn net.Conn
 	r       *bufio.Reader
 	w       *bufio.Writer
-	mu      sync.Mutex // guards writes
-	bodyBuf []byte     // BDAT chunk accumulation
+	mu      sync.Mutex      // guards writes
+	bodyBuf []byte          // BDAT chunk accumulation
+	ctx     context.Context // per-connection — cancelled on close or shutdown
 }
 
 func (c *connState) SetReadDeadline(t time.Time) {

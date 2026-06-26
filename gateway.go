@@ -150,8 +150,8 @@ type Server struct {
 	Handler Handler
 
 	// MaxMessageSize is the maximum message size in bytes.
-	// 0 means unlimited.  When set, SIZE is advertised in EHLO
-	// and messages exceeding the limit are rejected during DATA.
+	// Defaults to 25 MiB.  SIZE is advertised in EHLO and messages
+	// exceeding the limit are rejected during DATA.
 	MaxMessageSize int
 
 	// MaxRecipients is the maximum number of RCPT TO commands
@@ -161,7 +161,7 @@ type Server struct {
 	// MaxConnections limits concurrent connections.  0 means unlimited.
 	MaxConnections int
 
-	// ReadTimeout is the per-line read deadline.  0 means no deadline.
+	// ReadTimeout is the per-line read deadline.  Defaults to 5 minutes.
 	// The timer is reset after each successful read.
 	ReadTimeout time.Duration
 
@@ -169,7 +169,7 @@ type Server struct {
 	WriteTimeout time.Duration
 
 	// IdleTimeout closes the connection after this duration of inactivity.
-	// 0 means no idle timeout.  The timer resets on each successful read.
+	// Defaults to 5 minutes.  The timer resets on each successful read.
 	IdleTimeout time.Duration
 
 	// Logger receives structured log events.  If nil, logging is
@@ -222,7 +222,16 @@ func (s *Server) Serve(ln net.Listener) error {
 	if s.Hostname == "" {
 		s.Hostname = defaultHostname()
 	}
-	if s.MaxMessageSize > 0 && s.Logger != nil {
+	if s.MaxMessageSize == 0 {
+		s.MaxMessageSize = 25 << 20 // 25 MiB
+	}
+	if s.ReadTimeout == 0 {
+		s.ReadTimeout = 5 * time.Minute
+	}
+	if s.IdleTimeout == 0 {
+		s.IdleTimeout = 5 * time.Minute
+	}
+	if s.Logger != nil {
 		s.logInfo("max_message_size", slog.Int("bytes", s.MaxMessageSize))
 	}
 
