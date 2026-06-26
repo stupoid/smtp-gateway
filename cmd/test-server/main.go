@@ -4,7 +4,9 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -38,11 +40,15 @@ func main() {
 }
 
 func run() error {
-	if len(os.Args) < 3 {
-		return errors.New("usage: test-server <listen-addr> <postcat-dir>")
+	tlsCert := flag.String("tls-cert", "", "TLS certificate file (enables STARTTLS)")
+	tlsKey := flag.String("tls-key", "", "TLS key file (enables STARTTLS)")
+	flag.Parse()
+
+	if flag.NArg() < 2 {
+		return errors.New("usage: test-server [-tls-cert cert.pem -tls-key key.pem] <listen-addr> <postcat-dir>")
 	}
-	addr := os.Args[1]
-	postcatDir := os.Args[2]
+	addr := flag.Arg(0)
+	postcatDir := flag.Arg(1)
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -57,6 +63,14 @@ func run() error {
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
+	}
+
+	if *tlsCert != "" && *tlsKey != "" {
+		cert, err := tls.LoadX509KeyPair(*tlsCert, *tlsKey)
+		if err != nil {
+			return fmt.Errorf("load TLS key pair: %w", err)
+		}
+		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 	}
 
 	fmt.Printf("LISTENING %s\n", ln.Addr().String())
