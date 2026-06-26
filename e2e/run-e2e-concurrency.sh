@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Concurrency correctness + load benchmark for smtp-gateway.
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 source "$(dirname "$0")/_e2e_tools.sh"
 
 TMPDIR=$(mktemp -d)

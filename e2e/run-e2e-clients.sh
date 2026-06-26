@@ -2,7 +2,7 @@
 # Test SMTP gateway against common CLI mail clients:
 #   mutt, msmtp, curl (smtp://), swaks (baseline)
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 source "$(dirname "$0")/_e2e_tools.sh"
 
 TMPDIR=$(mktemp -d)

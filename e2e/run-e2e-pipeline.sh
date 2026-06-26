@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
+# Test PIPELINING: send MAIL FROM + RCPT TO + DATA in one write.
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 source "$(dirname "$0")/_e2e_tools.sh"
 
 TMPDIR=$(mktemp -d)
 POSTCAT_DIR="$TMPDIR/mail"
-SERVER_ADDR="127.0.0.1:12525"
-PASS=0
-FAIL=0
-
+SERVER_ADDR="127.0.0.1:12527"
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
 
@@ -19,7 +17,6 @@ go build -o verify-postcat ./cmd/verify-postcat/
 echo "=== Starting server ==="
 ./test-server "$SERVER_ADDR" "$POSTCAT_DIR" > "$TMPDIR/server.out" 2> "$TMPDIR/server.err" &
 SERVER_PID=$!
-
 for i in $(seq 1 30); do
     if grep -q LISTENING "$TMPDIR/server.out" 2>/dev/null; then break; fi
     sleep 0.1
@@ -27,36 +24,15 @@ done
 echo "Server ready."
 
 echo ""
-echo "=== Test 1: basic single-recipient ==="
-"$SWAKS" \
-    --to alice@example.com \
-    --from bob@example.net \
-    --server "$SERVER_ADDR" \
-    --body "Hello from e2e test" \
-    --header-Subject "e2e test"
-
-echo ""
-echo "=== Test 2: multiple recipients + null sender ==="
-"$SWAKS" \
-    --to alice@example.com,carol@example.org \
-    --from "" \
-    --server "$SERVER_ADDR" \
-    --body "null sender test" \
-    --header-Subject "null sender"
+echo "=== Test: PIPELINING (send all commands without waiting) ==="
+printf 'EHLO pipetest\r\nMAIL FROM:<pipe@test>\r\nRCPT TO:<a@x>\r\nDATA\r\nSubject: pipe\r\n\r\npipeline body\r\n.\r\nQUIT\r\n' | "$NC" -w 3 127.0.0.1 12527
 
 sleep 0.5
-
-echo ""
-echo "=== Stopping server ==="
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 
 echo ""
 echo "=== Postcat files ==="
-ls -la "$POSTCAT_DIR/"
-
-echo ""
-echo "=== Raw postcat content ==="
 for f in "$POSTCAT_DIR"/*.eml; do
     echo "--- $(basename "$f") ---"
     cat "$f"
@@ -64,8 +40,13 @@ for f in "$POSTCAT_DIR"/*.eml; do
 done
 
 echo ""
-echo "=== Verify with ParsePostcat ==="
-./verify-postcat "$POSTCAT_DIR"
+echo "=== Verify ==="
+./verify-postcat "$POSTCAT_DIR" 2>&1
 
-echo ""
-echo "All checks passed."
+# Check the server didn't crash.
+if grep -q "panic\|fatal" "$TMPDIR/server.err" 2>/dev/null; then
+    echo "FAIL: server stderr has errors"
+    cat "$TMPDIR/server.err"
+    exit 1
+fi
+echo "Server clean, no panics."

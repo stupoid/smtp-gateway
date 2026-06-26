@@ -20,5 +20,7 @@ go.work.sum
 /verify-postcat
 /postcat-replay
 /postcat
+/bench-go-smtp/go-smtp-server
 _debug/
 /examples/s3/s3
+/docs/

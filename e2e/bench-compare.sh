@@ -3,7 +3,7 @@
 # Runs the same concurrency/throughput load tests against both servers
 # and prints a comparison table.
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 source "$(dirname "$0")/_e2e_tools.sh"
 
 TMPDIR=$(mktemp -d -t smtp-bench-XXXXXX)

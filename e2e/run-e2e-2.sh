@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Test PIPELINING: send MAIL FROM + RCPT TO + DATA in one write.
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 source "$(dirname "$0")/_e2e_tools.sh"
 
 TMPDIR=$(mktemp -d)
 POSTCAT_DIR="$TMPDIR/mail"
-SERVER_ADDR="127.0.0.1:12527"
+SERVER_ADDR="127.0.0.1:12526"
+
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
 
@@ -24,10 +24,29 @@ done
 echo "Server ready."
 
 echo ""
-echo "=== Test: PIPELINING (send all commands without waiting) ==="
-printf 'EHLO pipetest\r\nMAIL FROM:<pipe@test>\r\nRCPT TO:<a@x>\r\nDATA\r\nSubject: pipe\r\n\r\npipeline body\r\n.\r\nQUIT\r\n' | "$NC" -w 3 127.0.0.1 12527
+echo "=== Test 1: null sender ==="
+"$SWAKS" \
+    --from '<>' \
+    --to nulltest@example.com \
+    --server "$SERVER_ADDR" \
+    --body "null sender body" \
+    --header-Subject "null sender"
+
+echo ""
+echo "=== Test 2: precise body ==="
+"$SWAKS" \
+    --from bob@x.com \
+    --to alice@x.com \
+    --server "$SERVER_ADDR" \
+    --body "one
+two
+three" \
+    --header-Subject "precise body"
 
 sleep 0.5
+
+echo ""
+echo "=== Stopping server ==="
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 
@@ -41,12 +60,4 @@ done
 
 echo ""
 echo "=== Verify ==="
-./verify-postcat "$POSTCAT_DIR" 2>&1
-
-# Check the server didn't crash.
-if grep -q "panic\|fatal" "$TMPDIR/server.err" 2>/dev/null; then
-    echo "FAIL: server stderr has errors"
-    cat "$TMPDIR/server.err"
-    exit 1
-fi
-echo "Server clean, no panics."
+./verify-postcat "$POSTCAT_DIR"

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 source "$(dirname "$0")/_e2e_tools.sh"
 
 TMPDIR=$(mktemp -d)
 POSTCAT_DIR="$TMPDIR/mail"
-SERVER_ADDR="127.0.0.1:12526"
+SERVER_ADDR="127.0.0.1:12525"
+PASS=0
+FAIL=0
 
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
@@ -17,6 +19,7 @@ go build -o verify-postcat ./cmd/verify-postcat/
 echo "=== Starting server ==="
 ./test-server "$SERVER_ADDR" "$POSTCAT_DIR" > "$TMPDIR/server.out" 2> "$TMPDIR/server.err" &
 SERVER_PID=$!
+
 for i in $(seq 1 30); do
     if grep -q LISTENING "$TMPDIR/server.out" 2>/dev/null; then break; fi
     sleep 0.1
@@ -24,24 +27,22 @@ done
 echo "Server ready."
 
 echo ""
-echo "=== Test 1: null sender ==="
+echo "=== Test 1: basic single-recipient ==="
 "$SWAKS" \
-    --from '<>' \
-    --to nulltest@example.com \
+    --to alice@example.com \
+    --from bob@example.net \
     --server "$SERVER_ADDR" \
-    --body "null sender body" \
-    --header-Subject "null sender"
+    --body "Hello from e2e test" \
+    --header-Subject "e2e test"
 
 echo ""
-echo "=== Test 2: precise body ==="
+echo "=== Test 2: multiple recipients + null sender ==="
 "$SWAKS" \
-    --from bob@x.com \
-    --to alice@x.com \
+    --to alice@example.com,carol@example.org \
+    --from "" \
     --server "$SERVER_ADDR" \
-    --body "one
-two
-three" \
-    --header-Subject "precise body"
+    --body "null sender test" \
+    --header-Subject "null sender"
 
 sleep 0.5
 
@@ -52,6 +53,10 @@ wait "$SERVER_PID" 2>/dev/null || true
 
 echo ""
 echo "=== Postcat files ==="
+ls -la "$POSTCAT_DIR/"
+
+echo ""
+echo "=== Raw postcat content ==="
 for f in "$POSTCAT_DIR"/*.eml; do
     echo "--- $(basename "$f") ---"
     cat "$f"
@@ -59,5 +64,8 @@ for f in "$POSTCAT_DIR"/*.eml; do
 done
 
 echo ""
-echo "=== Verify ==="
+echo "=== Verify with ParsePostcat ==="
 ./verify-postcat "$POSTCAT_DIR"
+
+echo ""
+echo "All checks passed."
