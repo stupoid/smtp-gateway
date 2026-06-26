@@ -13,6 +13,11 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 && (os.Args[1] == "-h" || os.Args[1] == "--help") {
+		fmt.Fprintf(os.Stderr, "Usage: postcat <file.eml>\n")
+		fmt.Fprintf(os.Stderr, "Print the decoded envelope and body of a postcat-format file.\n")
+		os.Exit(0)
+	}
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: postcat <file.eml>\n")
 		os.Exit(1)

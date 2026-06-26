@@ -10,8 +10,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 && (os.Args[1] == "-h" || os.Args[1] == "--help") {
+		fmt.Fprintf(os.Stderr, "Usage: verify-postcat <directory>\n")
+		fmt.Fprintf(os.Stderr, "Scan a directory of postcat files and report parse errors.\n")
+		os.Exit(0)
+	}
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: verify-postcat <directory>\n")
+		fmt.Fprintf(os.Stderr, "Usage: verify-postcat <directory>\n")
 		os.Exit(1)
 	}
 	entries, err := os.ReadDir(os.Args[1])
