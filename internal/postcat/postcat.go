@@ -48,11 +48,11 @@ func Write(dir, mailFrom string, accepted []string, body []byte) (string, error)
 	w := bufio.NewWriter(f)
 
 	// Envelope records.
-	if _, err := fmt.Fprintf(w, "S %s\n", FormatNullSender(mailFrom)); err != nil {
+	if _, err := fmt.Fprintf(w, "S %s\n", sanitizeAddr(FormatNullSender(mailFrom))); err != nil {
 		return path, fmt.Errorf("write sender record: %w", err)
 	}
 	for _, rcpt := range accepted {
-		if _, err := fmt.Fprintf(w, "R %s\n", rcpt); err != nil {
+		if _, err := fmt.Fprintf(w, "R %s\n", sanitizeAddr(rcpt)); err != nil {
 			return path, fmt.Errorf("write recipient record: %w", err)
 		}
 	}
@@ -157,4 +157,21 @@ func FormatNullSender(s string) string {
 		return "<>"
 	}
 	return s
+}
+
+// sanitizeAddr strips newline and carriage-return characters from an
+// envelope address.  Without this, a crafted address containing "\nS
+// attacker@evil.com" could inject fake envelope records into the
+// postcat file, corrupting audit trails or misleading downstream tools.
+func sanitizeAddr(a string) string {
+	// Most addresses contain no newlines, so avoid allocation when possible.
+	if !strings.ContainsAny(a, "\r\n") {
+		return a
+	}
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, a)
 }
