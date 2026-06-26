@@ -267,22 +267,14 @@ func (h *s3Handler) RcptTo(_ context.Context, tx *smtpgateway.Tx) *smtpgateway.R
 // can retry.  If you want to bounce permanently, return a 5xx code.
 func (h *s3Handler) Data(ctx context.Context, tx *smtpgateway.Tx, body []byte) *smtpgateway.Response {
 	// 1. Build postcat-format content (uncompressed).
-	var raw bytes.Buffer
-
-	fmt.Fprintf(&raw, "S %s\n", postcat.FormatNullSender(tx.MailFrom))
-	for _, rcpt := range tx.Accepted {
-		fmt.Fprintf(&raw, "R %s\n", rcpt)
-	}
 	now := time.Now()
-	fmt.Fprintf(&raw, "T %s\n", now.Format(time.RFC3339))
-	raw.WriteByte('\n') // envelope/body separator
-	raw.Write(body)
+	raw := postcat.FormatEnvelope(tx.MailFrom, tx.Accepted, now, body)
 
 	// 2. Gzip-compress via pooled writer.
 	gw := gzipWriterPool.Get().(*gzip.Writer)
 	var gz bytes.Buffer
 	gw.Reset(&gz)
-	if _, err := io.Copy(gw, &raw); err != nil {
+	if _, err := io.Copy(gw, bytes.NewReader(raw)); err != nil {
 		gzipWriterPool.Put(gw)
 		h.logger.Error("gzip_failed", "error", err)
 		return smtpgateway.RespSysError
@@ -326,7 +318,7 @@ func (h *s3Handler) Data(ctx context.Context, tx *smtpgateway.Tx, body []byte) *
 		"key", key,
 		"sender", postcat.FormatNullSender(tx.MailFrom),
 		"recipients", len(tx.Accepted),
-		"raw_bytes", raw.Len(),
+		"raw_bytes", len(raw),
 		"gz_bytes", len(compressed),
 	)
 	return smtpgateway.RespDataOK
