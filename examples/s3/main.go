@@ -45,6 +45,7 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
 	smtpgateway "github.com/stupoid/smtp-gateway"
+	"github.com/stupoid/smtp-gateway/internal/postcat"
 )
 
 func main() {
@@ -268,7 +269,7 @@ func (h *s3Handler) Data(ctx context.Context, tx *smtpgateway.Tx, body []byte) *
 	// 1. Build postcat-format content (uncompressed).
 	var raw bytes.Buffer
 
-	fmt.Fprintf(&raw, "S %s\n", formatNullSender(tx.MailFrom))
+	fmt.Fprintf(&raw, "S %s\n", postcat.FormatNullSender(tx.MailFrom))
 	for _, rcpt := range tx.Accepted {
 		fmt.Fprintf(&raw, "R %s\n", rcpt)
 	}
@@ -304,7 +305,7 @@ func (h *s3Handler) Data(ctx context.Context, tx *smtpgateway.Tx, body []byte) *
 		ContentType:     "message/rfc822",
 		ContentEncoding: "gzip",
 		UserMetadata: map[string]string{
-			"sender":     formatNullSender(tx.MailFrom),
+			"sender":     postcat.FormatNullSender(tx.MailFrom),
 			"recipients": strings.Join(tx.Accepted, ", "),
 			"helo":       tx.Helo,
 		},
@@ -323,7 +324,7 @@ func (h *s3Handler) Data(ctx context.Context, tx *smtpgateway.Tx, body []byte) *
 
 	h.logger.Info("stored",
 		"key", key,
-		"sender", formatNullSender(tx.MailFrom),
+		"sender", postcat.FormatNullSender(tx.MailFrom),
 		"recipients", len(tx.Accepted),
 		"raw_bytes", raw.Len(),
 		"gz_bytes", len(compressed),
@@ -346,13 +347,6 @@ func objectKey(prefix string, t time.Time, hash string) string {
 	)
 }
 
-// formatNullSender returns "<>" for empty or null senders.
-func formatNullSender(s string) string {
-	if s == "" || s == "<>" {
-		return "<>"
-	}
-	return s
-}
 
 // ---- env helpers ----
 
