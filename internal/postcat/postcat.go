@@ -44,8 +44,9 @@ func FormatEnvelope(mailFrom string, accepted []string, t time.Time, body []byte
 }
 
 // Write writes an accepted message to dir.  The file is named
-// <unix-timestamp>-<nanosecond>.eml and contains envelope records
-// followed by a blank line and the raw message.
+// <unix-timestamp>-<nanosecond>-<random>.eml (the random hex suffix
+// prevents collisions under concurrent writes) and contains envelope
+// records followed by a blank line and the raw message.
 //
 // The write is atomic: data is written to a temporary file and renamed
 // into place on success.  This prevents both partial-file artefacts and

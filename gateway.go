@@ -29,18 +29,22 @@ func (r *Response) String() string {
 // MultiLine formats the response for use in a multi-line reply.
 // Lines after the first use the code followed by a dash.
 func (r *Response) MultiLine() string {
+	// Formats a single continuation line of a multi-line SMTP reply.
+	// Each continuation uses code-dash; the final line must use
+	// String() (code-space) instead.  See handleEhlo for the pattern.
 	return fmt.Sprintf("%d-%s\r\n", r.Code, r.Message)
 }
 
-// Copy returns a newly allocated copy of the Response.  Use this when
-// you need to mutate a response returned by a handler callback (the
-// pre-defined Resp* variables are shared pointers — do not modify them).
+// Copy returns a newly allocated copy of the Response.
+// Use Resp*.Copy() when you need to mutate a pre-defined response
+// (e.g. RespMailOK.Copy()).  The Resp* variables are shared
+// pointers and must not be modified directly.
 func (r *Response) Copy() *Response {
 	return &Response{Code: r.Code, Message: r.Message}
 }
 
-// Pre-defined SMTP responses. These are shared pointers — do not modify
-// them. Use r.Copy() if you need a mutable version.
+// Pre-defined SMTP responses. These are shared pointers -- do not modify
+// them. Use Resp*.Copy() if you need a mutable version.
 var (
 	RespHelloOK      = &Response{250, "OK"}
 	RespMailOK       = &Response{250, "2.1.0 OK"}
@@ -66,7 +70,7 @@ type Rejection struct {
 type Tx struct {
 	RemoteAddr net.Addr
 	TLS        *tls.ConnectionState
-	Hostname   string // server hostname from the EHLO banner
+	Hostname   string // server's advertised hostname (from Server.Hostname, set before EHLO)
 	Helo       string // client's HELO/EHLO domain
 	MailFrom   string // envelope sender (empty string for null sender <>)
 	Params     map[string]string
