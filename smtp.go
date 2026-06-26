@@ -902,7 +902,15 @@ func isTimeout(err error) bool {
 	return errors.As(err, &ne) && ne.Timeout()
 }
 
+// truncate strips control characters (except tab) and truncates to n rune-safe
+// bytes.  Used to sanitise SMTP command arguments for logging.
 func truncate(s string, n int) string {
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 && r != '\t' || r == 0x7F {
+			return -1
+		}
+		return r
+	}, s)
 	if len(s) <= n {
 		return s
 	}
