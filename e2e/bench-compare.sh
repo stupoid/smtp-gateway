@@ -10,10 +10,10 @@ TMPDIR=$(mktemp -d -t smtp-bench-XXXXXX)
 cleanup() { jobs -p | xargs -r kill 2>/dev/null || true; rm -rf "$TMPDIR"; }
 trap cleanup EXIT
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
-pass()  { echo -e "${GREEN}PASS${NC} $*"; }
-fail()  { echo -e "${RED}FAIL${NC} $*"; exit 1; }
-info()  { echo -e "${CYAN}INFO${NC} $*"; }
+RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; RST='\033[0m'
+pass()  { echo -e "${GREEN}PASS${RST} $*"; }
+fail()  { echo -e "${RED}FAIL${RST} $*"; exit 1; }
+info()  { echo -e "${CYAN}INFO${RST} $*"; }
 
 echo "=== Building servers ==="
 CGO_ENABLED=0 go build -o "$TMPDIR/test-server" ./cmd/test-server/

@@ -15,16 +15,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
-pass() { echo -e "${GREEN}PASS${NC} $*"; }
-fail() { echo -e "${RED}FAIL${NC} $*"; exit 1; }
-info() { echo -e "${CYAN}INFO${NC} $*"; }
+RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; RST='\033[0m'
+pass() { echo -e "${GREEN}PASS${RST} $*"; }
+fail() { echo -e "${RED}FAIL${RST} $*"; exit 1; }
+info() { echo -e "${CYAN}INFO${RST} $*"; }
 
 echo "=== Building ==="
-CGO_ENABLED=0 go build -o test-server ./cmd/test-server/
+CGO_ENABLED=0 go build -o "$TMPDIR/test-server" ./cmd/test-server/
 
 echo "=== Starting server ==="
-./test-server "$ADDR" "$POSTCAT_DIR" > "$TMPDIR/server.out" 2> "$TMPDIR/server.err" &
+"$TMPDIR/test-server" "$ADDR" "$POSTCAT_DIR" > "$TMPDIR/server.out" 2> "$TMPDIR/server.err" &
 SRV=$!
 for i in $(seq 1 30); do
     grep -q LISTENING "$TMPDIR/server.out" 2>/dev/null && break

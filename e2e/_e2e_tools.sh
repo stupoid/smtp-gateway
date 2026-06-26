@@ -10,23 +10,22 @@ set -euo pipefail
 
 resolve() {
 	local cmd="$1" nixpkg="$2"
-	if command -v "$cmd" >/dev/null 2>&1; then
-		echo "$cmd"
-	elif command -v nix >/dev/null 2>&1; then
+	local p
+	p=$(command -v "$cmd" 2>/dev/null) || true
+	if [ -n "${p:-}" ]; then
+		echo "$p"
+		return 0
+	fi
+	if command -v nix >/dev/null 2>&1; then
 		local store
 		store=$(nix build "$nixpkg" --print-out-paths --no-link 2>/dev/null) || true
 		if [ -n "${store:-}" ] && [ -x "$store/bin/$cmd" ]; then
 			echo "$store/bin/$cmd"
-		else
-			echo "ERROR: $cmd not found in PATH and nix build failed for $nixpkg" >&2
-			echo "Install it: apt install $cmd   (or the equivalent for your OS)" >&2
-			exit 1
+			return 0
 		fi
-	else
-		echo "ERROR: $cmd not found in PATH (and nix is not available)" >&2
-		echo "Install it: apt install $cmd   (or the equivalent for your OS)" >&2
-		exit 1
 	fi
+	echo "ERROR: $cmd not found (PATH or nix) — install: apt install $cmd" >&2
+	exit 1
 }
 
 SWAKS=$(resolve swaks  nixpkgs#swaks)
