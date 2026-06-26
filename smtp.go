@@ -292,7 +292,12 @@ func (s *Server) readCommands(
 func readDotUnstuffed(r *bufio.Reader, maxSize int, conn *connState, readTimeout time.Duration) ([]byte, error) {
 	var buf []byte
 	if maxSize > 0 {
-		buf = make([]byte, 0, maxSize)
+		// Start small — most messages are well under the limit.
+		// pre-allocating maxSize (25 MiB by default) wastes heap
+		// on every DATA command, and the few reallocations during
+		// append growth are cheaper than scanning 25 MiB of unused
+		// capacity at GC time.
+		buf = make([]byte, 0, 4096)
 	}
 	for {
 		line, err := readLine(r, readTimeout, conn)
