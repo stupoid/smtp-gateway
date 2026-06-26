@@ -67,7 +67,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 
 	conn := &connState{
 		netConn: netConn,
-		r:       bufio.NewReader(netConn),
+		r:       bufio.NewReaderSize(netConn, maxLineLength),
 		w:       bufio.NewWriter(netConn),
 	}
 
