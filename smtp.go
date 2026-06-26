@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stupoid/smtp-gateway/internal/postcat"
 )
@@ -140,9 +141,6 @@ func (s *Server) handleConn(netConn net.Conn) {
 					}
 				case "RCPT":
 					resp = s.handleRcpt(cmd, tx, &phase, gotHelo)
-					if phase < phaseRcpt && resp.Code == 250 {
-						phase = phaseRcpt
-					}
 				case "DATA":
 					resp = s.handleData(conn, cmd, tx, phase, resumeCh)
 					if resp.Code == 250 {
@@ -413,13 +411,15 @@ func (s *Server) handleStartTLS(
 	}
 
 	// Apply a deadline to prevent a slow TLS handshake from blocking
-	// the worker goroutine indefinitely.
-	tlsTimeout := s.ReadTimeout
-	if tlsTimeout <= 0 {
-		tlsTimeout = 30 * time.Second
-	}
+	// the worker goroutine indefinitely.  TLS handshake timeout is
+	// independent of the SMTP read timeout — 30 seconds is ample.
+	tlsTimeout := 30 * time.Second
 	_ = conn.netConn.SetDeadline(time.Now().Add(tlsTimeout))
-	tlsConn := tls.Server(conn.netConn, s.TLSConfig.Clone())
+	cfg := s.TLSConfig.Clone()
+	if cfg.MinVersion < tls.VersionTLS12 {
+		cfg.MinVersion = tls.VersionTLS12
+	}
+	tlsConn := tls.Server(conn.netConn, cfg)
 	if err := tlsConn.Handshake(); err != nil {
 		_ = conn.netConn.SetDeadline(time.Time{})
 		s.logError("tls_handshake_error", slog.String("error", err.Error()))
@@ -823,6 +823,10 @@ func (c *connState) Close() error {
 	return c.netConn.Close()
 }
 
+// maxLineLength is the maximum SMTP command line length.  Lines exceeding
+// this are rejected to prevent unbounded buffer growth in bufio.Reader.
+const maxLineLength = 65536
+
 // readLine reads a line from r, handling both \r\n and bare \n.
 // Returns the line without the trailing newline sequence.
 // If readTimeout > 0, sets a per-read deadline before calling ReadString.
@@ -834,7 +838,11 @@ func readLine(r *bufio.Reader, readTimeout time.Duration, conn *connState) (stri
 	if err != nil {
 		return "", err
 	}
-	line = strings.TrimRight(line, "\r\n")
+	if len(line) > maxLineLength {
+		return "", errors.New("line too long")
+	}
+	line = strings.TrimSuffix(line, "\r\n")
+	line = strings.TrimSuffix(line, "\n")
 	return line, nil
 }
 
@@ -846,6 +854,9 @@ func isTimeout(err error) bool {
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n] + "..."
 }
