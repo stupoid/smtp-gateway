@@ -343,6 +343,24 @@ func (s *Server) bodyReadTimeout() time.Duration {
 	return s.ReadTimeout
 }
 
+// validateHeloDomain checks the HELO/EHLO argument for length and
+// character sanity.  RFC 5321 requires a domain name or address
+// literal; we reject control characters and excessively long values
+// as defence-in-depth against downstream handlers that may store or
+// log the domain unsafely.
+func validateHeloDomain(domain string) bool {
+	if len(domain) > 255 {
+		return false
+	}
+	for i := 0; i < len(domain); i++ {
+		c := domain[i]
+		if c < 0x20 || c == 0x7F {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) handleHelo(
 	conn *connState, cmd smtpCmd, tx *Tx, gotHelo bool,
 ) (*Response, bool) {
@@ -352,6 +370,9 @@ func (s *Server) handleHelo(
 	tx.Helo = cmd.args
 	if tx.Helo == "" {
 		return &Response{501, "5.5.2 HELO requires domain"}, false
+	}
+	if !validateHeloDomain(tx.Helo) {
+		return &Response{501, "5.5.2 Invalid HELO domain"}, false
 	}
 	resp := s.Handler.Hello(conn.ctx, tx)
 	if resp == nil || resp.Code != 250 {
@@ -372,6 +393,9 @@ func (s *Server) handleEhlo(
 	tx.Helo = cmd.args
 	if tx.Helo == "" {
 		return &Response{501, "5.5.2 EHLO requires domain"}, false
+	}
+	if !validateHeloDomain(tx.Helo) {
+		return &Response{501, "5.5.2 Invalid EHLO domain"}, false
 	}
 	resp := s.Handler.Hello(conn.ctx, tx)
 	if resp == nil || resp.Code != 250 {
