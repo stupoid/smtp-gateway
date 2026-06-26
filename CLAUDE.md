@@ -4,7 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commit convention
 
-Use Conventional Commits: `<type>(<scope>): <imperative summary>`. Atomic commits — one logical change per commit. Verify before committing: run tests, lint, and `git diff --check`.
+Use Conventional Commits: `<type>(<scope>): <imperative summary>`. Atomic commits — one logical change per commit. A commit that mixes a bug fix, a refactor, and a new feature is not atomic; split it into separate commits.
+
+### Commit messages must convey intent
+
+The subject line says what changed. When the *why* is not obvious from the diff, the body must explain it:
+
+- What problem motivated this change?
+- What alternative approaches were considered and rejected?
+- What surprising constraint or edge case does this handle?
+
+A commit message like `fix(smtp): reset gotHelo after STARTTLS` tells you what happened. A body that adds "RFC 3207 requires the server to forget the EHLO domain after a successful TLS handshake; without this, clients re-issuing EHLO got stale state" tells you why it matters.
+
+Before committing, ask: "If I read this commit message six months from now, would I understand *why* this change was necessary?" If the answer is no, rewrite the message.
+
+### Verification
+
+Verify before committing: run tests, lint, and `git diff --check`.
 
 When a change alters runtime behaviour (new defaults, changed contracts, new/removed API surface, CLI flag changes), check that `README.md` reflects the current state. Stale pitfall entries, outdated examples, and missing configuration options should be caught before the commit lands.
 
