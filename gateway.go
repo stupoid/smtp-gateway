@@ -203,11 +203,12 @@ type Server struct {
 	PostcatDir string
 
 	// --- internal ---
-	ln      net.Listener
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
-	connSem chan struct{}
+	ln           net.Listener
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	connSem      chan struct{}
+	shutdownOnce sync.Once
 }
 
 // Slog is a convenience constructor that wraps a *slog.Logger.
@@ -291,9 +292,11 @@ func (s *Server) Serve(ln net.Listener) error {
 // connections and waits for active connections to finish or ctx to
 // expire.  The caller must still close the listener to unblock Serve.
 func (s *Server) Shutdown(ctx context.Context) error {
-	if s.cancel != nil {
-		s.cancel()
-	}
+	s.shutdownOnce.Do(func() {
+		if s.cancel != nil {
+			s.cancel()
+		}
+	})
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
