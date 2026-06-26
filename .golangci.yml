@@ -49,6 +49,7 @@ linters:
         - name: unreachable-code
     goconst:
       min-occurrences: 6
+      ignore-tests: true
     perfsprint:
       int-conversion: false
       err-error: true
