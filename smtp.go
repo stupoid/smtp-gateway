@@ -141,6 +141,10 @@ func (s *Server) handleConn(netConn net.Conn) {
 					}
 				case "STARTTLS":
 					resp, tlsReady = s.handleStartTLS(conn, tx, gotHelo, tlsReady, resumeCh)
+					if tlsReady {
+						gotHelo = false
+						phase = phaseInit
+					}
 				case "MAIL":
 					resp = s.handleMail(conn, cmd, tx, phase, gotHelo, tlsReady)
 					if resp.Code == 250 {

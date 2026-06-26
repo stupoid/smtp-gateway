@@ -7,6 +7,8 @@ package postcat
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,7 +33,10 @@ type Message struct {
 // filename collisions under concurrent writes.
 func Write(dir, mailFrom string, accepted []string, body []byte) (string, error) {
 	now := time.Now()
-	name := fmt.Sprintf("%d-%d.eml", now.Unix(), now.Nanosecond())
+	var rnd [4]byte
+	_, _ = rand.Read(rnd[:])
+	id := hex.EncodeToString(rnd[:])
+	name := fmt.Sprintf("%d-%d-%s.eml", now.Unix(), now.Nanosecond(), id)
 	path := filepath.Join(dir, name)
 
 	f, err := os.CreateTemp(dir, "."+name+"-*")
