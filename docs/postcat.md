@@ -1,8 +1,18 @@
 # Postcat format guide
 
 Postcat files are the on-disk persistence format used by smtp-gateway.
-They follow the same layout as Postfix's `postcat(1)` output: envelope
+They follow the same layout as Postfix's
+[postcat(1)](https://www.postfix.org/postcat.1.html) output: envelope
 records, a blank separator line, and the raw RFC 5322 message body.
+
+## References
+
+- [Postfix postcat(1)](https://www.postfix.org/postcat.1.html) — the
+  original format this implementation follows
+- [RFC 5321](https://datatracker.ietf.org/doc/html/rfc5321) — SMTP
+  (envelope, relay)
+- [RFC 5322](https://datatracker.ietf.org/doc/html/rfc5322) — Internet
+  Message Format (headers + body structure)
 
 ## File format
 

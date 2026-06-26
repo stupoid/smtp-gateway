@@ -109,25 +109,15 @@ Reader                          Worker
 
 ## Transaction state machine
 
-```
-                    ┌──────────┐
-     new connection  │ phaseInit│◄──────── RSET or successful DATA ──┐
-                    └────┬─────┘                                     │
-                         │ HELO / EHLO                               │
-                    ┌────▼─────┐                                     │
-                    │ phaseHelo │                                     │
-                    └────┬─────┘                                     │
-                         │ MAIL FROM                                 │
-                    ┌────▼──────┐                                    │
-                    │ phaseMail  │                                    │
-                    └────┬──────┘                                    │
-                         │ RCPT TO                                   │
-                    ┌────▼──────┐                                    │
-                    │ phaseRcpt  │────────────────────────────────────┘
-                    └────┬──────┘
-                         │ DATA / BDAT LAST
-                         ▼
-                    handler.Data callback
+```mermaid
+stateDiagram-v2
+    [*] --> phaseInit : new connection
+    phaseInit --> phaseHelo : HELO / EHLO
+    phaseHelo --> phaseMail : MAIL FROM
+    phaseMail --> phaseRcpt : RCPT TO
+    phaseRcpt --> handler_Data : DATA / BDAT LAST
+    handler_Data --> phaseInit : RSET or successful DATA
+    phaseRcpt --> phaseInit : RSET or successful DATA
 ```
 
 A `Tx` is created at connection start and replaced after RSET or
