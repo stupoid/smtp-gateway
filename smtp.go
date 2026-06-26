@@ -655,6 +655,15 @@ func readNBytes(r *bufio.Reader, n int, conn *connState, readTimeout time.Durati
 	if n == 0 {
 		return nil, nil
 	}
+	// Hard cap on a single BDAT chunk.  The MaxMessageSize check in
+	// handleBdat limits total accumulated body size, but a single
+	// BDAT <huge> LAST declaration could still trigger a proportional
+	// make([]byte, n) before the limit check fires.  64 MiB is well
+	// above the default 25 MiB MaxMessageSize while preventing OOM.
+	const maxChunk = 64 << 20
+	if n > maxChunk {
+		return nil, fmt.Errorf("chunk size %d exceeds maximum %d", n, maxChunk)
+	}
 	buf := make([]byte, n)
 	if readTimeout > 0 {
 		conn.SetReadDeadline(time.Now().Add(readTimeout))
