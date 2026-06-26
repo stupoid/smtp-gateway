@@ -936,5 +936,6 @@ func (s *Server) newTx(conn net.Conn) *Tx {
 	return &Tx{
 		RemoteAddr: conn.RemoteAddr(),
 		Hostname:   s.Hostname,
+		Params:     map[string]string{},
 	}
 }
