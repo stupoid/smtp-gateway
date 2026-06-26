@@ -32,9 +32,15 @@ func (r *Response) MultiLine() string {
 	return fmt.Sprintf("%d-%s\r\n", r.Code, r.Message)
 }
 
+// Copy returns a newly allocated copy of the Response.  Use this when
+// you need to mutate a response returned by a handler callback (the
+// pre-defined Resp* variables are shared pointers — do not modify them).
+func (r *Response) Copy() *Response {
+	return &Response{Code: r.Code, Message: r.Message}
+}
+
 // Pre-defined SMTP responses. These are shared pointers — do not modify
-// them. Copy via &Response{Code: r.Code, Message: r.Message} if you need
-// a mutable version.
+// them. Use r.Copy() if you need a mutable version.
 var (
 	RespHelloOK      = &Response{250, "OK"}
 	RespMailOK       = &Response{250, "2.1.0 OK"}
