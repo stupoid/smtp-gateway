@@ -59,6 +59,13 @@ var (
 	RespEightBit     = &Response{550, "5.6.3 Message contains 8-bit data but BODY=8BITMIME not specified"}
 )
 
+// Default values applied by NewServer and Serve() for zero-value fields.
+const (
+	DefaultMaxMessageSize = 25 << 20 // 25 MiB
+	DefaultReadTimeout    = 5 * time.Minute
+	DefaultIdleTimeout    = 5 * time.Minute
+)
+
 // Rejection records a recipient that was rejected at the RCPT TO phase.
 type Rejection struct {
 	Recipient string
@@ -113,25 +120,33 @@ type Logger interface {
 	Error(msg string, args ...any)
 }
 
-// SlogAdapter wraps a *slog.Logger to satisfy the Logger interface.
+// SlogLogger is a Logger backed by a *slog.Logger.
 // Debug → slog.LevelDebug, Info → slog.LevelInfo, Error → slog.LevelError.
-type SlogAdapter struct {
+// A nil SlogLogger (or one with a nil Logger) is a no-op — all methods
+// safely discard the call.
+type SlogLogger struct {
 	Logger *slog.Logger
 }
 
 // Debug logs at slog.LevelDebug.
-func (a *SlogAdapter) Debug(msg string, args ...any) {
-	a.Logger.Debug(msg, args...)
+func (a *SlogLogger) Debug(msg string, args ...any) {
+	if a.Logger != nil {
+		a.Logger.Debug(msg, args...)
+	}
 }
 
 // Info logs at slog.LevelInfo.
-func (a *SlogAdapter) Info(msg string, args ...any) {
-	a.Logger.Info(msg, args...)
+func (a *SlogLogger) Info(msg string, args ...any) {
+	if a.Logger != nil {
+		a.Logger.Info(msg, args...)
+	}
 }
 
 // Error logs at slog.LevelError.
-func (a *SlogAdapter) Error(msg string, args ...any) {
-	a.Logger.Error(msg, args...)
+func (a *SlogLogger) Error(msg string, args ...any) {
+	if a.Logger != nil {
+		a.Logger.Error(msg, args...)
+	}
 }
 
 // Server is an SMTP gateway server.  It accepts connections from
@@ -183,8 +198,8 @@ type Server struct {
 	IdleTimeout time.Duration
 
 	// Logger receives structured log events.  If nil, logging is
-	// discarded.  Use SlogAdapter to wrap an *slog.Logger, or use Slog()
-	// as a convenience constructor.
+	// discarded.  Use SlogLogger to wrap a *slog.Logger, or use
+	// NewSlogLogger() as a convenience constructor.
 	Logger Logger
 
 	// PostcatDir, when non-empty, causes the server to write each
@@ -208,11 +223,10 @@ type Server struct {
 	shutdownOnce sync.Once
 }
 
-// Slog is a convenience constructor that wraps a *slog.Logger.
-// The returned Logger sends Info at slog.LevelInfo and Error at
-// slog.LevelError (no additional wrapping).
-func Slog(l *slog.Logger) Logger {
-	return &SlogAdapter{Logger: l}
+// NewSlogLogger returns a Logger backed by l.  If l is nil, the returned
+// Logger is a no-op — all methods safely discard the call.
+func NewSlogLogger(l *slog.Logger) Logger {
+	return &SlogLogger{Logger: l}
 }
 
 // Serve accepts connections on ln and handles them until the listener
@@ -240,13 +254,13 @@ func (s *Server) Serve(ln net.Listener) error {
 		s.Hostname = defaultHostname()
 	}
 	if s.MaxMessageSize == 0 {
-		s.MaxMessageSize = 25 << 20 // 25 MiB
+		s.MaxMessageSize = DefaultMaxMessageSize
 	}
 	if s.ReadTimeout == 0 {
-		s.ReadTimeout = 5 * time.Minute
+		s.ReadTimeout = DefaultReadTimeout
 	}
 	if s.IdleTimeout == 0 {
-		s.IdleTimeout = 5 * time.Minute
+		s.IdleTimeout = DefaultIdleTimeout
 	}
 	if s.Logger != nil {
 		s.logInfo("max_message_size", slog.Int("bytes", s.MaxMessageSize))
