@@ -105,6 +105,11 @@ The `Logger` interface (`gateway.go`) has three methods: `Debug`, `Info`, `Error
 
 Flat files with envelope records (`S`, `R`, `T` lines) followed by a blank line and raw RFC 5322 body. Written by `postcat.Write()` when `Server.PostcatDir` is set. Parsed by `postcat.Parse()`. The `cmd/postcat` and `cmd/postcat-replay` tools provide CLI access. `cmd/verify-postcat` does batch verification.
 
+## Knowledge base
+
+CONCEPTS.md  # shared domain vocabulary — read when orienting to the codebase
+docs/solutions/  # documented solutions to past problems, organized by category with YAML frontmatter (module, tags, problem_type)
+
 ## Test patterns
 
 Tests live in two files:
