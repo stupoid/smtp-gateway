@@ -136,6 +136,9 @@ func (s *Server) handleConn(netConn net.Conn) {
 				if cmd.verb == "DATA" || cmd.verb == "STARTTLS" {
 					resumeCh <- struct{}{}
 				}
+				// Abandon the BDAT sequence — orphaned chunk data
+				// must not leak into the next BDAT transaction.
+				conn.bodyBuf = nil
 				resp = &Response{503, "5.5.1 Bad sequence of commands"}
 			} else {
 				switch cmd.verb {
@@ -653,9 +656,8 @@ func readNBytes(r *bufio.Reader, n int, conn *connState, readTimeout time.Durati
 	// BDAT <huge> LAST declaration could still trigger a proportional
 	// make([]byte, n) before the limit check fires.  64 MiB is well
 	// above the default 25 MiB MaxMessageSize while preventing OOM.
-	const maxChunk = 64 << 20
-	if n > maxChunk {
-		return nil, fmt.Errorf("chunk size %d exceeds maximum %d", n, maxChunk)
+	if n > maxBDATChunk {
+		return nil, fmt.Errorf("chunk size %d exceeds maximum %d", n, maxBDATChunk)
 	}
 	buf := make([]byte, n)
 	if readTimeout > 0 {
@@ -877,6 +879,12 @@ func (c *connState) Close() error {
 // maxLineLength is the maximum SMTP command line length.  Lines exceeding
 // this are rejected to prevent unbounded buffer growth in bufio.Reader.
 const maxLineLength = 65536
+
+// maxBDATChunk is the maximum size of a single BDAT chunk.  A client that
+// declares BDAT <huge> LAST could trigger a proportional make([]byte, n)
+// before the MaxMessageSize check fires.  64 MiB is well above the default
+// 25 MiB MaxMessageSize while preventing OOM.
+const maxBDATChunk = 64 << 20
 
 // readLine reads a line from r, handling both \r\n and bare \n.
 // Returns the line without the trailing newline sequence.
