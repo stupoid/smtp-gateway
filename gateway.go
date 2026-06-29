@@ -121,7 +121,7 @@ type SlogAdapter struct {
 
 // Debug logs at slog.LevelDebug.
 func (a *SlogAdapter) Debug(msg string, args ...any) {
-	a.Logger.Log(context.Background(), slog.LevelDebug, msg, args...)
+	a.Logger.Debug(msg, args...)
 }
 
 // Info logs at slog.LevelInfo.

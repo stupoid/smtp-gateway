@@ -20,7 +20,6 @@ import (
 
 // --- SMTP protocol helpers ---
 
-// smtpCmd represents a single parsed SMTP command.
 type smtpCmd struct {
 	verb string // upper-case verb: HELO, MAIL, RCPT, DATA, etc.
 	args string // everything after the verb, trimmed
@@ -28,8 +27,7 @@ type smtpCmd struct {
 
 // parseSMTPCommand splits "VERB args\r\n" into verb and args.
 func parseSMTPCommand(line string) (verb, args string) {
-	verb, args = splitVerb(line)
-	return verb, strings.TrimSpace(args)
+	return splitVerb(line)
 }
 
 func splitVerb(line string) (verb, rest string) {
@@ -276,7 +274,6 @@ func (s *Server) readCommands(
 			}
 		}
 
-		// QUIT terminates the reader.
 		if verb == "QUIT" {
 			return
 		}
@@ -468,9 +465,7 @@ func (s *Server) handleStartTLS(
 		return nil, false
 	}
 	_ = conn.netConn.SetDeadline(time.Time{})
-	conn.netConn = tlsConn
-	conn.r = bufio.NewReader(tlsConn)
-	conn.w = bufio.NewWriter(tlsConn)
+	conn.upgradeToTLS(tlsConn)
 
 	cs := tlsConn.ConnectionState()
 	tx.TLS = &cs
@@ -614,14 +609,8 @@ func (s *Server) handleData(
 		resp = RespBadSeq
 	}
 
-	// Write postcat file if configured and accepted.
-	if resp != nil && resp.Code == 250 && s.PostcatDir != "" {
-		if path, err := postcat.Write(s.PostcatDir, tx.MailFrom, tx.Accepted, body); err != nil {
-			s.logError("postcat_write_error",
-				slog.String("error", err.Error()),
-				slog.String("path", path),
-			)
-		}
+	if resp.Code == 250 {
+		s.writePostcat(tx.MailFrom, tx.Accepted, body)
 	}
 
 	return resp
@@ -681,52 +670,51 @@ func (s *Server) handleBdat(
 	// waiting for BDAT processing to finish.
 	defer func() { resumeCh <- struct{}{} }()
 
-	// Parse BDAT arguments BEFORE guard checks so we know how many
-	// bytes to discard on early rejection (keeps protocol synchronised).
-	size, last, err := parseBdatArgs(cmd.args)
-	if err != nil {
-		*inBdat = false
-		conn.bodyBuf = nil
-		return &Response{501, "5.5.4 Bad BDAT syntax"}
-	}
-
 	// Apply a read deadline for chunk reads so a slow client doesn't
 	// block the worker goroutine indefinitely.
 	readTimeout := s.ReadTimeout
-	// discardChunk drains `size` raw bytes from the connection to keep the
-	// protocol stream synchronised on rejection.  Uses io.CopyN so the
-	// buffer is fixed-size regardless of the declared chunk size — a
-	// client that sends BDAT <huge> before HELO must not trigger a
-	// proportional allocation.
+
+	var size int
+	var last bool
+	// discardChunk drains `size` raw bytes from the connection on rejection
+	// and resets BDAT state so the connection can continue with a new
+	// transaction. Uses bufio.Reader.Discard so the buffer is fixed-size regardless of
+	// the declared chunk size — a client that sends BDAT <huge> before HELO
+	// must not trigger a proportional allocation.
 	discardChunk := func() {
+		*inBdat = false
+		conn.bodyBuf = nil
 		if size > 0 {
 			if readTimeout > 0 {
 				conn.SetReadDeadline(time.Now().Add(readTimeout))
 			}
-			if _, discErr := io.CopyN(io.Discard, conn.r, int64(size)); discErr != nil {
+			if _, discErr := conn.r.Discard(size); discErr != nil {
 				s.logError("bdat_read_error", slog.String("error", discErr.Error()))
 			}
 		}
 	}
 
+	// Parse BDAT arguments BEFORE guard checks so we know how many
+	// bytes to discard on early rejection (keeps protocol synchronised).
+	var err error
+	size, last, err = parseBdatArgs(cmd.args)
+	if err != nil {
+		discardChunk()
+		return &Response{501, "5.5.4 Bad BDAT syntax"}
+	}
+
 	if phase < phaseRcpt {
 		discardChunk()
-		*inBdat = false
-		conn.bodyBuf = nil
 		return &Response{503, "5.5.1 RCPT required first"}
 	}
 	if len(tx.Accepted) == 0 {
 		discardChunk()
-		*inBdat = false
-		conn.bodyBuf = nil
 		return &Response{554, "5.5.1 No valid recipients"}
 	}
 
 	// MaxMessageSize check before reading.
 	if s.MaxMessageSize > 0 && len(conn.bodyBuf)+size > s.MaxMessageSize {
 		discardChunk()
-		*inBdat = false
-		conn.bodyBuf = nil
 		return RespMessageSize
 	}
 
@@ -762,13 +750,8 @@ func (s *Server) handleBdat(
 		resp = RespBadSeq
 	}
 
-	if resp.Code == 250 && s.PostcatDir != "" {
-		if path, err := postcat.Write(s.PostcatDir, tx.MailFrom, tx.Accepted, conn.bodyBuf); err != nil {
-			s.logError("postcat_write_error",
-				slog.String("error", err.Error()),
-				slog.String("path", path),
-			)
-		}
+	if resp.Code == 250 {
+		s.writePostcat(tx.MailFrom, tx.Accepted, conn.bodyBuf)
 	}
 
 	conn.bodyBuf = nil
@@ -785,7 +768,7 @@ func parseMailFrom(args string) (string, map[string]string, error) {
 	rest := strings.TrimSpace(args)
 
 	// Expect "FROM:<...>" or "FROM:<>"
-	if !strings.HasPrefix(strings.ToUpper(rest), "FROM:") {
+	if len(rest) < 5 || !strings.EqualFold(rest[:5], "FROM:") {
 		return "", params, ErrBadSyntax
 	}
 	rest = rest[5:] // skip "FROM:"
@@ -821,7 +804,7 @@ func parseMailFrom(args string) (string, map[string]string, error) {
 // parseRcptTo extracts the forward-path from a RCPT TO argument string.
 func parseRcptTo(args string) string {
 	rest := strings.TrimSpace(args)
-	if !strings.HasPrefix(strings.ToUpper(rest), "TO:") {
+	if len(rest) < 3 || !strings.EqualFold(rest[:3], "TO:") {
 		return rest // best-effort: return everything
 	}
 	rest = rest[3:]
@@ -845,6 +828,12 @@ type connState struct {
 	mu      sync.Mutex      // guards writes
 	bodyBuf []byte          // BDAT chunk accumulation
 	ctx     context.Context // per-connection — cancelled on close or shutdown
+}
+
+func (c *connState) upgradeToTLS(tlsConn net.Conn) {
+	c.netConn = tlsConn
+	c.r = bufio.NewReader(tlsConn)
+	c.w = bufio.NewWriter(tlsConn)
 }
 
 func (c *connState) SetReadDeadline(t time.Time) {
@@ -946,6 +935,20 @@ func contains8Bit(b []byte) bool {
 		}
 	}
 	return false
+}
+
+// writePostcat writes a postcat file if PostcatDir is configured.
+// The write is best-effort — errors are logged, not returned.
+func (s *Server) writePostcat(mailFrom string, accepted []string, body []byte) {
+	if s.PostcatDir == "" {
+		return
+	}
+	if path, err := postcat.Write(s.PostcatDir, mailFrom, accepted, body); err != nil {
+		s.logError("postcat_write_error",
+			slog.String("error", err.Error()),
+			slog.String("path", path),
+		)
+	}
 }
 
 // newTx creates a fresh transaction state for a new connection.
