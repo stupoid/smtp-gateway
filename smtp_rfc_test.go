@@ -426,9 +426,13 @@ func TestSMTPDataBeforeRcpt(t *testing.T) {
 	sendAndExpect(t, conn, scanner, "EHLO mx\r\n", "250")
 	_ = readMultiline(t, scanner)
 	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
-	// DATA before RCPT → 503
+	// DATA before RCPT → 503.  RFC 5321 §4.1.1.4: after failed DATA
+	// the server returns to post-HELO state; RSET is required before
+	// a new mail transaction.
 	sendAndExpect(t, conn, scanner, "DATA\r\n", "503")
+	sendAndExpect(t, conn, scanner, "RSET\r\n", "250")
 
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
 	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
 	sendAndExpect(t, conn, scanner, "DATA\r\n", "354")
 	write(t, conn, "body\r\n.\r\n")

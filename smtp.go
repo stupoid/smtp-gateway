@@ -164,8 +164,12 @@ func (s *Server) handleConn(netConn net.Conn) {
 					resp = s.handleRcpt(conn, cmd, tx, &phase, gotHelo)
 				case "DATA":
 					resp = s.handleData(conn, cmd, tx, phase, resumeCh)
-					if resp.Code == 250 {
-						phase = phaseInit
+					// RFC 5321 §4.1.1.4: reset mail transaction state
+					// after DATA regardless of acceptance/rejection.
+					// The session returns to post-HELO state: HELO is
+					// still valid, but MAIL FROM / RCPT TO are cleared.
+					if resp != nil {
+						phase = phaseHelo
 						tx = s.newTx(netConn)
 						conn.bodyBuf = nil
 					}
