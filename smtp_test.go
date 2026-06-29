@@ -389,13 +389,14 @@ func smtpSession(_ *testing.T, addr string, id int) error {
 		return err
 	}
 
+	sid := strconv.Itoa(id)
 	body := []byte("From: sender@test\r\nTo: rcpt@test\r\nX-Id: " +
-		itoa(id) + "\r\n\r\nmessage body " + itoa(id) + "\r\n")
+		sid + "\r\n\r\nmessage body " + sid + "\r\n")
 
 	commands := []string{
-		"EHLO client-" + itoa(id) + "\r\n",
-		"MAIL FROM:<s" + itoa(id) + "@test>\r\n",
-		"RCPT TO:<r" + itoa(id) + "@test>\r\n",
+		"EHLO client-" + sid + "\r\n",
+		"MAIL FROM:<s" + sid + "@test>\r\n",
+		"RCPT TO:<r" + sid + "@test>\r\n",
 		"DATA\r\n",
 	}
 	for _, cmd := range commands {
@@ -473,10 +474,6 @@ func drainML(rw *bufio.ReadWriter) error {
 			return nil
 		}
 	}
-}
-
-func itoa(i int) string {
-	return strconv.Itoa(i)
 }
 
 // ---------------------------------------------------------------------------
@@ -583,7 +580,7 @@ func TestServerWithBodyVerification(t *testing.T) {
 				_, _ = rw.WriteString(cmd)
 				return rw.Flush()
 			}
-			_ = send("EHLO c" + itoa(id) + "\r\n")
+			_ = send("EHLO c" + strconv.Itoa(id) + "\r\n")
 			// Read multi-line EHLO response.
 			for {
 				l, _ := rw.ReadString('\n')
@@ -591,9 +588,9 @@ func TestServerWithBodyVerification(t *testing.T) {
 					break
 				}
 			}
-			_ = send("MAIL FROM:<s" + itoa(id) + "@test>\r\n")
+			_ = send("MAIL FROM:<s" + strconv.Itoa(id) + "@test>\r\n")
 			_ = expectLine(rw, "250")
-			_ = send("RCPT TO:<r" + itoa(id) + "@test>\r\n")
+			_ = send("RCPT TO:<r" + strconv.Itoa(id) + "@test>\r\n")
 			_ = expectLine(rw, "250")
 			_ = send("DATA\r\n")
 			_ = expectLine(rw, "354")
