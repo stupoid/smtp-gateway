@@ -23,3 +23,6 @@ go.work.sum
 /bench-go-smtp/go-smtp-server
 _debug/
 /examples/s3/s3
+
+# Compound Engineering local config
+.compound-engineering/*.local.yaml

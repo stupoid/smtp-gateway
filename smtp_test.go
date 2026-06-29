@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -372,6 +373,70 @@ func TestServerConcurrency(t *testing.T) {
 
 	_ = l.Close()
 	_ = srv.Shutdown(context.Background())
+}
+
+// TestServerSustainedConcurrency runs 1000 messages across 50 concurrent
+// sessions and verifies the goroutine count returns to baseline.
+// This catches slow goroutine leaks that accumulate over many transactions.
+func TestServerSustainedConcurrency(t *testing.T) {
+	// Record baseline — the testing package adds goroutines, so we
+	// measure relative to ambient rather than an absolute number.
+	baseline := runtime.NumGoroutine()
+
+	srv := &Server{
+		Hostname:    "test.local",
+		Handler:     &acceptAllHandler{},
+		ReadTimeout: 5 * time.Second,
+	}
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	go func() {
+		_ = srv.Serve(l)
+	}()
+
+	addr := l.Addr().String()
+
+	// 50 goroutines × 20 messages each = 1000 total transactions.
+	const sessions = 50
+	const perSession = 20
+	errs := make(chan error, sessions*perSession)
+
+	var wg sync.WaitGroup
+	for id := 0; id < sessions; id++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < perSession; j++ {
+				if err := smtpSession(t, addr, id*perSession+j); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}(id)
+	}
+	wg.Wait()
+	close(errs)
+
+	for e := range errs {
+		t.Error(e)
+	}
+
+	_ = l.Close()
+	_ = srv.Shutdown(context.Background())
+
+	// Let goroutines settle.
+	time.Sleep(200 * time.Millisecond)
+
+	final := runtime.NumGoroutine()
+	if final > baseline+5 {
+		t.Errorf("goroutine leak: baseline=%d final=%d (delta=%d)",
+			baseline, final, final-baseline)
+	}
 }
 
 // smtpSession performs a complete SMTP transaction over a TCP connection.

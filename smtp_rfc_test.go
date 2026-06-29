@@ -249,6 +249,24 @@ func (h *recordingHandler) Data(_ context.Context, tx *Tx, body []byte) *Respons
 	return RespDataOK
 }
 
+// collectingHandler records the body received for each unique envelope
+// sender.  Safe for concurrent use.  Used by concurrency tests to
+// verify no cross-contamination between sessions.
+type collectingHandler struct {
+	mu     sync.Mutex
+	bodies map[string][]byte
+}
+
+func (h *collectingHandler) Hello(_ context.Context, _ *Tx) *Response    { return RespHelloOK }
+func (h *collectingHandler) MailFrom(_ context.Context, _ *Tx) *Response { return RespMailOK }
+func (h *collectingHandler) RcptTo(_ context.Context, _ *Tx) *Response   { return RespRcptOK }
+func (h *collectingHandler) Data(_ context.Context, tx *Tx, body []byte) *Response {
+	h.mu.Lock()
+	h.bodies[tx.MailFrom] = append([]byte{}, body...)
+	h.mu.Unlock()
+	return RespDataOK
+}
+
 // ---------------------------------------------------------------------------
 // SMTP smuggling protection
 // ---------------------------------------------------------------------------
@@ -1502,4 +1520,438 @@ func TestSMTPBDATMultipleSessions(t *testing.T) {
 	rec.mu.Unlock()
 
 	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
+// ---------------------------------------------------------------------------
+// BDAT concurrency
+// ---------------------------------------------------------------------------
+
+// bdatSession performs a multi-chunk BDAT transaction on its own connection.
+// Returns an error (never calls t.Fatal) so it can run in goroutines.
+func bdatSession(addr string, id int, bodyParts []string) error {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+
+	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+
+	if err := expectLine(rw, "220"); err != nil {
+		return err
+	}
+
+	// EHLO
+	if _, err := rw.WriteString("EHLO client\r\n"); err != nil {
+		return err
+	}
+	if err := rw.Flush(); err != nil {
+		return err
+	}
+	if err := drainML(rw); err != nil {
+		return err
+	}
+
+	// MAIL FROM with unique sender.
+	sender := fmt.Sprintf("s%d@test", id)
+	if _, err := fmt.Fprintf(rw, "MAIL FROM:<%s>\r\n", sender); err != nil {
+		return err
+	}
+	if err := rw.Flush(); err != nil {
+		return err
+	}
+	if err := expectLine(rw, "250"); err != nil {
+		return err
+	}
+
+	// RCPT TO
+	if _, err := fmt.Fprintf(rw, "RCPT TO:<r%d@test>\r\n", id); err != nil {
+		return err
+	}
+	if err := rw.Flush(); err != nil {
+		return err
+	}
+	if err := expectLine(rw, "250"); err != nil {
+		return err
+	}
+
+	// BDAT chunks — non-LAST for all but the final chunk.
+	for i, part := range bodyParts {
+		last := i == len(bodyParts)-1
+		cmd := fmt.Sprintf("BDAT %d\r\n", len(part))
+		if last {
+			cmd = fmt.Sprintf("BDAT %d LAST\r\n", len(part))
+		}
+		if _, err := rw.WriteString(cmd); err != nil {
+			return err
+		}
+		if _, err := rw.WriteString(part); err != nil {
+			return err
+		}
+		if err := rw.Flush(); err != nil {
+			return err
+		}
+		if err := expectLine(rw, "250"); err != nil {
+			return err
+		}
+	}
+
+	// QUIT
+	if _, err := rw.WriteString("QUIT\r\n"); err != nil {
+		return err
+	}
+	if err := rw.Flush(); err != nil {
+		return err
+	}
+	if err := expectLine(rw, "221"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func TestSMTPBDATConcurrency(t *testing.T) {
+	col := &collectingHandler{bodies: make(map[string][]byte)}
+	srv := &Server{
+		Hostname:    "test.local",
+		Handler:     col,
+		ReadTimeout: 5 * time.Second,
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+	addr := l.Addr().String()
+
+	n := 20
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			bodyParts := []string{
+				fmt.Sprintf("Hello from %d ", id),
+				"middle chunk ",
+				fmt.Sprintf("final from %d", id),
+			}
+			errs[id] = bdatSession(addr, id, bodyParts)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, e := range errs {
+		if e != nil {
+			t.Errorf("session %d: %v", i, e)
+		}
+	}
+
+	_ = l.Close()
+	_ = srv.Shutdown(context.Background())
+
+	// Verify no cross-contamination: each sender's body must match exactly.
+	col.mu.Lock()
+	defer col.mu.Unlock()
+	if len(col.bodies) != n {
+		t.Errorf("expected %d bodies, got %d", n, len(col.bodies))
+	}
+	for id := 0; id < n; id++ {
+		sender := fmt.Sprintf("s%d@test", id)
+		body, ok := col.bodies[sender]
+		if !ok {
+			t.Errorf("missing body for sender %s", sender)
+			continue
+		}
+		want := fmt.Sprintf("Hello from %d middle chunk final from %d", id, id)
+		if string(body) != want {
+			t.Errorf("sender %s: body = %q, want %q", sender, string(body), want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// STARTTLS concurrency
+// ---------------------------------------------------------------------------
+
+// startTLSSession performs a full STARTTLS-upgraded transaction on its own
+// connection.  Returns an error (never calls t.Fatal) for goroutine use.
+func startTLSSession(addr string, id int) error {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+
+	rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+
+	// Banner.
+	if err := expectLine(rw, "220"); err != nil {
+		return err
+	}
+
+	// EHLO + drain multi-line.
+	if _, err := rw.WriteString("EHLO client\r\n"); err != nil {
+		return err
+	}
+	if err := rw.Flush(); err != nil {
+		return err
+	}
+	if err := drainML(rw); err != nil {
+		return err
+	}
+
+	// STARTTLS.
+	if _, err := rw.WriteString("STARTTLS\r\n"); err != nil {
+		return err
+	}
+	if err := rw.Flush(); err != nil {
+		return err
+	}
+	if err := expectLine(rw, "220"); err != nil {
+		return err
+	}
+
+	// TLS handshake.  Overwrite conn so the deferred close cleans up
+	// the TLS connection (not just the raw TCP socket).
+	tlsConn := tls.Client(conn, &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         "test.local",
+	})
+	if err := tlsConn.Handshake(); err != nil {
+		return err
+	}
+	conn = tlsConn
+	rw = bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+
+	// Re-EHLO over TLS.
+	if _, err := rw.WriteString("EHLO client\r\n"); err != nil {
+		return err
+	}
+	if err := rw.Flush(); err != nil {
+		return err
+	}
+	if err := drainML(rw); err != nil {
+		return err
+	}
+
+	// MAIL FROM with unique sender.
+	sender := fmt.Sprintf("s%d@test", id)
+	if _, err := fmt.Fprintf(rw, "MAIL FROM:<%s>\r\n", sender); err != nil {
+		return err
+	}
+	if err := rw.Flush(); err != nil {
+		return err
+	}
+	if err := expectLine(rw, "250"); err != nil {
+		return err
+	}
+
+	// RCPT TO.
+	if _, err := fmt.Fprintf(rw, "RCPT TO:<r%d@test>\r\n", id); err != nil {
+		return err
+	}
+	if err := rw.Flush(); err != nil {
+		return err
+	}
+	if err := expectLine(rw, "250"); err != nil {
+		return err
+	}
+
+	// DATA + body.
+	if _, err := rw.WriteString("DATA\r\n"); err != nil {
+		return err
+	}
+	if err := rw.Flush(); err != nil {
+		return err
+	}
+	if err := expectLine(rw, "354"); err != nil {
+		return err
+	}
+	body := fmt.Sprintf("secure-body-%d", id)
+	if _, err := rw.WriteString(body + "\r\n.\r\n"); err != nil {
+		return err
+	}
+	if err := rw.Flush(); err != nil {
+		return err
+	}
+	if err := expectLine(rw, "250"); err != nil {
+		return err
+	}
+
+	// QUIT.
+	if _, err := rw.WriteString("QUIT\r\n"); err != nil {
+		return err
+	}
+	if err := rw.Flush(); err != nil {
+		return err
+	}
+	if err := expectLine(rw, "221"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func TestSMTPStartTLSConcurrency(t *testing.T) {
+	cert := testCert(t)
+
+	col := &collectingHandler{bodies: make(map[string][]byte)}
+	srv := &Server{
+		Hostname:    "test.local",
+		Handler:     col,
+		ReadTimeout: 5 * time.Second,
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		},
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+	addr := l.Addr().String()
+
+	n := 10
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			errs[id] = startTLSSession(addr, id)
+		}(i)
+	}
+	wg.Wait()
+
+	for i, e := range errs {
+		if e != nil {
+			t.Errorf("session %d: %v", i, e)
+		}
+	}
+
+	_ = l.Close()
+	_ = srv.Shutdown(context.Background())
+
+	// Verify all bodies arrived correctly.
+	col.mu.Lock()
+	defer col.mu.Unlock()
+	if len(col.bodies) != n {
+		t.Errorf("expected %d bodies, got %d", n, len(col.bodies))
+	}
+	for id := 0; id < n; id++ {
+		sender := fmt.Sprintf("s%d@test", id)
+		body, ok := col.bodies[sender]
+		if !ok {
+			t.Errorf("missing body for sender %s", sender)
+			continue
+		}
+		want := fmt.Sprintf("secure-body-%d\r\n", id)
+		if string(body) != want {
+			t.Errorf("sender %s: body = %q, want %q", sender, string(body), want)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// MaxConnections enforcement
+// ---------------------------------------------------------------------------
+
+func TestSMTPMaxConnectionsEnforced(t *testing.T) {
+	srv := &Server{
+		Hostname:       "test.local",
+		Handler:        &acceptAllHandler{},
+		ReadTimeout:    1 * time.Second,
+		IdleTimeout:    1 * time.Second,
+		MaxConnections: 2,
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+	addr := l.Addr().String()
+
+	// Helper: dial and read banner.
+	dialAndBanner := func() (net.Conn, *bufio.Scanner) {
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		scanner := bufio.NewScanner(conn)
+		if !scanner.Scan() {
+			_ = conn.Close()
+			t.Fatalf("no banner: %v", scanner.Err())
+		}
+		if !strings.HasPrefix(scanner.Text(), "220 ") {
+			_ = conn.Close()
+			t.Fatalf("bad banner: %s", scanner.Text())
+		}
+		return conn, scanner
+	}
+
+	// Phase 1: first two connections are accepted and can transact.
+	conn1, scanner1 := dialAndBanner()
+	t.Cleanup(func() { _ = conn1.Close() })
+
+	conn2, scanner2 := dialAndBanner()
+	t.Cleanup(func() { _ = conn2.Close() })
+
+	sendAndExpect(t, conn1, scanner1, "EHLO c1\r\n", "250")
+	_ = readMultiline(t, scanner1)
+	sendAndExpect(t, conn2, scanner2, "EHLO c2\r\n", "250")
+	_ = readMultiline(t, scanner2)
+
+	// Phase 2: third connection is accepted by TCP but immediately
+	// closed by the server (connSem is full).  The read yields EOF
+	// — no banner, no SMTP response.
+	conn3, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial conn3: %v", err)
+	}
+	defer func() { _ = conn3.Close() }()
+	_ = conn3.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	scanner3 := bufio.NewScanner(conn3)
+	if scanner3.Scan() {
+		t.Errorf("conn3 should not receive banner, got: %s", scanner3.Text())
+	}
+
+	// Phase 3: release conn1's slot and verify a new connection is
+	// accepted.
+	_ = conn1.Close()
+
+	var conn4 net.Conn
+	var scanner4 *bufio.Scanner
+	for attempt := 0; attempt < 50; attempt++ {
+		c, dialErr := net.Dial("tcp", addr)
+		if dialErr != nil {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		s := bufio.NewScanner(c)
+		if s.Scan() && strings.HasPrefix(s.Text(), "220 ") {
+			conn4 = c
+			scanner4 = s
+			break
+		}
+		_ = c.Close()
+		time.Sleep(20 * time.Millisecond)
+	}
+	if conn4 == nil {
+		t.Fatal("conn4 never got banner after releasing slot")
+	}
+	defer func() { _ = conn4.Close() }()
+
+	sendAndExpect(t, conn4, scanner4, "EHLO c4\r\n", "250")
+	_ = readMultiline(t, scanner4)
+	sendAndExpect(t, conn4, scanner4, "QUIT\r\n", "221")
+
+	_ = conn2.Close()
+	_ = l.Close()
+	_ = srv.Shutdown(context.Background())
 }
