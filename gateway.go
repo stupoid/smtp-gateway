@@ -154,13 +154,10 @@ type Server struct {
 	Handler Handler
 
 	// MaxMessageSize is the maximum message size in bytes.
-	// Defaults to 25 MiB.  SIZE is advertised in EHLO and messages
-	// exceeding the limit are rejected during DATA and BDAT.
-	//
-	// Setting this to 0 disables the limit entirely — there is no
-	// secondary safety net.  Without a limit, a single BDAT chunk
-	// can trigger an allocation proportional to the client-declared
-	// chunk size.
+	// Defaults to 25 MiB (enforced in Serve).  The zero value is
+	// overridden — there is no way to disable the limit.  SIZE is
+	// advertised in EHLO and messages exceeding the limit are
+	// rejected during DATA and BDAT.
 	MaxMessageSize int
 
 	// MaxRecipients is the maximum number of RCPT TO commands
