@@ -223,6 +223,63 @@ type Server struct {
 	shutdownOnce sync.Once
 }
 
+// ServerOption configures a Server constructed via NewServer.
+type ServerOption func(*Server)
+
+// NewServer returns a fully initialised Server with handler set and all
+// defaults applied.  Options override defaults; when the same option is
+// passed multiple times, the last one wins.
+//
+// Struct-literal initialization remains supported — Serve() applies the
+// same defaults for zero-value fields.
+func NewServer(handler Handler, opts ...ServerOption) *Server {
+	hostname, _ := os.Hostname()
+	s := &Server{
+		Handler:        handler,
+		Hostname:       hostname,
+		MaxMessageSize: DefaultMaxMessageSize,
+		ReadTimeout:    DefaultReadTimeout,
+		IdleTimeout:    DefaultIdleTimeout,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// WithHostname sets the server hostname used in the SMTP banner and
+// EHLO response.
+func WithHostname(v string) ServerOption { return func(s *Server) { s.Hostname = v } }
+
+// WithTLSConfig sets the TLS configuration for STARTTLS support.
+func WithTLSConfig(v *tls.Config) ServerOption { return func(s *Server) { s.TLSConfig = v } }
+
+// WithMaxMessageSize sets the maximum message size in bytes.
+func WithMaxMessageSize(v int) ServerOption { return func(s *Server) { s.MaxMessageSize = v } }
+
+// WithMaxRecipients sets the maximum number of RCPT TO commands per
+// transaction.  0 means unlimited.
+func WithMaxRecipients(v int) ServerOption { return func(s *Server) { s.MaxRecipients = v } }
+
+// WithMaxConnections limits concurrent connections.  0 means unlimited.
+func WithMaxConnections(v int) ServerOption { return func(s *Server) { s.MaxConnections = v } }
+
+// WithReadTimeout sets the per-line read deadline.
+func WithReadTimeout(v time.Duration) ServerOption { return func(s *Server) { s.ReadTimeout = v } }
+
+// WithWriteTimeout sets the per-response write deadline.  0 means no deadline.
+func WithWriteTimeout(v time.Duration) ServerOption { return func(s *Server) { s.WriteTimeout = v } }
+
+// WithIdleTimeout sets the connection idle timeout.
+func WithIdleTimeout(v time.Duration) ServerOption { return func(s *Server) { s.IdleTimeout = v } }
+
+// WithLogger sets the server logger.  Pass nil to discard logs.
+func WithLogger(v Logger) ServerOption { return func(s *Server) { s.Logger = v } }
+
+// WithPostcatDir sets the postcat output directory.  When non-empty,
+// accepted messages are written as Postfix-compatible files.
+func WithPostcatDir(v string) ServerOption { return func(s *Server) { s.PostcatDir = v } }
+
 // NewSlogLogger returns a Logger backed by l.  If l is nil, the returned
 // Logger is a no-op — all methods safely discard the call.
 func NewSlogLogger(l *slog.Logger) Logger {
