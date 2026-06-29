@@ -533,8 +533,6 @@ func (s *Server) handleRcpt(
 	if *phase < phaseMail {
 		return &Response{503, "5.5.1 MAIL required first"}
 	}
-	*phase = phaseRcpt
-
 	rcpt := parseRcptTo(cmd.args)
 	if len(rcpt) > 320 || containsControl(rcpt) {
 		return &Response{501, "5.5.2 Invalid recipient address"}
@@ -545,6 +543,9 @@ func (s *Server) handleRcpt(
 		return &Response{452, "4.5.3 Too many recipients"}
 	}
 
+	// Advance phase only after validation passes — a syntax error
+	// must leave the transaction state unchanged.
+	*phase = phaseRcpt
 	resp := s.Handler.RcptTo(conn.ctx, tx)
 	if resp != nil && resp.Code == 250 {
 		tx.Accepted = append(tx.Accepted, rcpt)
