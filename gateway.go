@@ -130,23 +130,26 @@ type SlogLogger struct {
 
 // Debug logs at slog.LevelDebug.
 func (a *SlogLogger) Debug(msg string, args ...any) {
-	if a.Logger != nil {
-		a.Logger.Debug(msg, args...)
+	if a == nil || a.Logger == nil {
+		return
 	}
+	a.Logger.Debug(msg, args...)
 }
 
 // Info logs at slog.LevelInfo.
 func (a *SlogLogger) Info(msg string, args ...any) {
-	if a.Logger != nil {
-		a.Logger.Info(msg, args...)
+	if a == nil || a.Logger == nil {
+		return
 	}
+	a.Logger.Info(msg, args...)
 }
 
 // Error logs at slog.LevelError.
 func (a *SlogLogger) Error(msg string, args ...any) {
-	if a.Logger != nil {
-		a.Logger.Error(msg, args...)
+	if a == nil || a.Logger == nil {
+		return
 	}
+	a.Logger.Error(msg, args...)
 }
 
 // Server is an SMTP gateway server.  It accepts connections from
@@ -233,10 +236,9 @@ type ServerOption func(*Server)
 // Struct-literal initialization remains supported — Serve() applies the
 // same defaults for zero-value fields.
 func NewServer(handler Handler, opts ...ServerOption) *Server {
-	hostname, _ := os.Hostname()
 	s := &Server{
 		Handler:        handler,
-		Hostname:       hostname,
+		Hostname:       defaultHostname(),
 		MaxMessageSize: DefaultMaxMessageSize,
 		ReadTimeout:    DefaultReadTimeout,
 		IdleTimeout:    DefaultIdleTimeout,

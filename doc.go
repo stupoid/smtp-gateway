@@ -29,11 +29,11 @@
 //
 // A Tx accumulates state across the phases of a single SMTP transaction:
 //
-//	phaseInit  →  HELO/EHLO  →  tx.Helo populated, Hello callback
-//	phaseHelo  →  MAIL FROM  →  tx.MailFrom + tx.Params populated, MailFrom callback
-//	phaseMail  →  RCPT TO    →  tx.Rcpts appended, tx.Accepted/rejected split, RcptTo callback
-//	phaseRcpt  →  DATA/BDAT  →  body delivered, Data callback (if accepted recipients > 0)
-//	           →  RSET       →  tx reset, back to phaseInit
+//	New connection →  HELO/EHLO  →  tx.Helo populated, Hello callback
+//	After HELO    →  MAIL FROM  →  tx.MailFrom + tx.Params populated, MailFrom callback
+//	After MAIL    →  RCPT TO    →  tx.Rcpts appended, tx.Accepted/rejected split, RcptTo callback
+//	After RCPT    →  DATA/BDAT  →  body delivered, Data callback (if accepted recipients > 0)
+//	              →  RSET       →  tx reset, back to start
 //
 // See docs/handler-guide.md for a detailed walkthrough with a state diagram.
 package smtpgateway

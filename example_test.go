@@ -3,19 +3,23 @@ package smtpgateway_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"os"
 
 	smtpgateway "github.com/stupoid/smtp-gateway"
 )
 
-// Example demonstrates creating a Server with the NewServer constructor
-// and functional options.
+// Example demonstrates creating a Server with the NewServer constructor,
+// functional options, and structured logging via NewSlogLogger.
 func Example() {
 	h := &exampleHandler{}
+	logger := smtpgateway.NewSlogLogger(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	srv := smtpgateway.NewServer(
 		h,
 		smtpgateway.WithHostname("mx.example.com"),
 		smtpgateway.WithMaxMessageSize(10<<20),
 		smtpgateway.WithMaxRecipients(50),
+		smtpgateway.WithLogger(logger),
 	)
 	fmt.Println(srv.Hostname)
 	fmt.Println(srv.MaxMessageSize)

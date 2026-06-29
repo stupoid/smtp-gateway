@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 )
 
 func TestNewServerDefaults(t *testing.T) {
@@ -83,9 +84,9 @@ func TestNewServerWithAllOptions(t *testing.T) {
 		WithMaxMessageSize(10<<20),
 		WithMaxRecipients(100),
 		WithMaxConnections(50),
-		WithReadTimeout(30),
-		WithWriteTimeout(10),
-		WithIdleTimeout(60),
+		WithReadTimeout(30*time.Second),
+		WithWriteTimeout(10*time.Second),
+		WithIdleTimeout(60*time.Second),
 		WithLogger(l),
 		WithPostcatDir("/tmp/test"),
 	)
@@ -101,15 +102,37 @@ func TestNewServerWithAllOptions(t *testing.T) {
 	if s.MaxConnections != 50 {
 		t.Errorf("MaxConnections = %d", s.MaxConnections)
 	}
+	if s.ReadTimeout != 30*time.Second {
+		t.Errorf("ReadTimeout = %v", s.ReadTimeout)
+	}
+	if s.WriteTimeout != 10*time.Second {
+		t.Errorf("WriteTimeout = %v", s.WriteTimeout)
+	}
+	if s.IdleTimeout != 60*time.Second {
+		t.Errorf("IdleTimeout = %v", s.IdleTimeout)
+	}
+	if s.Logger != l {
+		t.Error("Logger not set")
+	}
+	if s.PostcatDir != "/tmp/test" {
+		t.Errorf("PostcatDir = %q", s.PostcatDir)
+	}
 }
 
-func TestNewServerServeZeroValueFallback(t *testing.T) {
-	// Struct-literal path: zero-value Server gets defaults in Serve().
-	// We can't call Serve() in a unit test without a listener,
-	// but we can verify the zero-value Server is constructable.
-	s := &Server{Handler: &acceptAllHandler{}}
-	if s.Handler == nil {
-		t.Fatal("handler not set")
+func TestSlogLoggerNilGuard(t *testing.T) {
+	// NewSlogLogger(nil) returns a no-op Logger.
+	l := NewSlogLogger(nil)
+	if l == nil {
+		t.Fatal("NewSlogLogger(nil) returned nil")
 	}
-	_ = s // zero-value Server with Handler set — no panic
+	// Methods must not panic.
+	l.Debug("test")
+	l.Info("test")
+	l.Error("test")
+
+	// Nil SlogLogger pointer through interface must also be safe.
+	var nl *SlogLogger
+	nl.Debug("test")
+	nl.Info("test")
+	nl.Error("test")
 }
