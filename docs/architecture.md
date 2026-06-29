@@ -133,6 +133,8 @@ only called if `len(tx.Accepted) > 0`.
 
 ## Handler contract
 
+→ [Handler guide](handler-guide.md) — phase-by-phase walkthrough with Tx lifecycle diagram and consolidated invariants.
+
 ```go
 type Handler interface {
     Hello(ctx, tx)  *Response  // called after HELO/EHLO

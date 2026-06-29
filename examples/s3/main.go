@@ -86,20 +86,17 @@ func run() error {
 	}
 
 	maxSize := cfg.smtpMaxSize
-	if maxSize == 0 {
-		maxSize = 25 << 20 // 25 MiB
-	}
 
-	srv := &smtpgateway.Server{
-		Hostname:       cfg.smtpHostname,
-		Handler:        h,
-		MaxMessageSize: maxSize,
-		MaxConnections: 100,
-		ReadTimeout:    5 * time.Minute,
-		WriteTimeout:   1 * time.Minute,
-		IdleTimeout:    5 * time.Minute,
-		Logger:         smtpgateway.Slog(logger),
-	}
+	srv := smtpgateway.NewServer(
+		h,
+		smtpgateway.WithHostname(cfg.smtpHostname),
+		smtpgateway.WithMaxMessageSize(maxSize),
+		smtpgateway.WithMaxConnections(100),
+		smtpgateway.WithReadTimeout(5*time.Minute),
+		smtpgateway.WithWriteTimeout(1*time.Minute),
+		smtpgateway.WithIdleTimeout(5*time.Minute),
+		smtpgateway.WithLogger(smtpgateway.NewSlogLogger(logger)),
+	)
 
 	logger.Info("starting",
 		"listen", cfg.smtpListen,

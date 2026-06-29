@@ -99,7 +99,7 @@ The `Handler` interface (`gateway.go`) has four callbacks: `Hello`, `MailFrom`, 
 
 ### Logging
 
-The `Logger` interface (`gateway.go`) has three methods: `Debug`, `Info`, `Error`. The `args ...any` variadic follows `slog` conventions (key=value pairs). Use `smtpgateway.Slog(slog.Default())` for the built-in slog adapter, `nil` to discard all logs. Connection open/close events are Debug-level; SMTP command/body events are Info-level; errors are Error-level.
+The `Logger` interface (`gateway.go`) has three methods: `Debug`, `Info`, `Error`. The `args ...any` variadic follows `slog` conventions (key=value pairs). Use `smtpgateway.NewSlogLogger(slog.Default())` for the built-in slog adapter, `nil` to discard all logs. Connection open/close events are Debug-level; SMTP command/body events are Info-level; errors are Error-level.
 
 ### Postcat format (`internal/postcat/`)
 

@@ -53,10 +53,9 @@ func (h *myHandler) Data(ctx context.Context, tx *smtpgateway.Tx, body []byte) *
 }
 
 func main() {
-	srv := smtpgateway.Server{
-		Hostname: "mx.example.com",
-		Handler:  &myHandler{},
-	}
+	srv := smtpgateway.NewServer(&myHandler{},
+		smtpgateway.WithHostname("mx.example.com"),
+	)
 
 	ln, err := net.Listen("tcp", ":25")
 	if err != nil {
@@ -96,35 +95,34 @@ The same `Handler` instance handles all connections concurrently — use
 
 ## Customising behaviour
 
-| What you want | How to do it |
+| What you want | Struct literal | NewServer option |
 |---|---|
 | Reject at HELO (auth, blocklist) | Return non-250 from `Handler.Hello` |
 | Reject sender | Return non-250 from `Handler.MailFrom` |
 | Accept/reject individual recipients | Return 250/non-250 from `Handler.RcptTo` |
 | Store/reject message body | `Handler.Data` gets raw bytes |
-| Enable STARTTLS | Set `Server.TLSConfig` |
+| Enable STARTTLS | `Server.TLSConfig` | `WithTLSConfig(cfg)` |
 | Enable SMTPS (implicit TLS) | Pass a `tls.Listener` to `Serve` |
-| Limit message size | Set `Server.MaxMessageSize` |
-| Limit recipients | Set `Server.MaxRecipients` |
-| Limit connections | Set `Server.MaxConnections` |
-| Set read/write/idle timeouts | Set `Server.ReadTimeout`, `WriteTimeout`, `IdleTimeout` |
-| Quiet operation | Set `Server.Logger = nil` |
-| Structured JSON logging | `Server.Logger = smtpgateway.Slog(slog.New(slog.NewJSONHandler(...)))` |
-| Capture mail to disk | Set `Server.PostcatDir` |
+| Limit message size | `Server.MaxMessageSize` | `WithMaxMessageSize(n)` |
+| Limit recipients | `Server.MaxRecipients` | `WithMaxRecipients(n)` |
+| Limit connections | `Server.MaxConnections` | `WithMaxConnections(n)` |
+| Set read/write/idle timeouts | `Server.ReadTimeout` etc. | `WithReadTimeout(d)` etc. |
+| Quiet operation | `Server.Logger = nil` | `WithLogger(nil)` |
+| Structured logging | `Server.Logger = smtpgateway.NewSlogLogger(slog.New(...))` | `WithLogger(smtpgateway.NewSlogLogger(slog.New(...)))` |
+| Capture mail to disk | `Server.PostcatDir` | `WithPostcatDir(dir)` |
 
 ## With STARTTLS
 
 ```go
 cert, _ := tls.LoadX509KeyPair("cert.pem", "key.pem")
 
-srv := smtpgateway.Server{
-	Hostname:  "mx.example.com",
-	Handler:   handler,
-	TLSConfig: &tls.Config{
+srv := smtpgateway.NewServer(handler,
+	smtpgateway.WithHostname("mx.example.com"),
+	smtpgateway.WithTLSConfig(&tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS12,
-	},
-}
+	}),
+)
 
 ln, _ := net.Listen("tcp", ":587")
 srv.Serve(ln)
@@ -165,14 +163,14 @@ try [mox](https://github.com/mjl-/mox) or
 
 ## Postcat sink
 
-Set `Server.PostcatDir` and every message lands as a flat file in
+Set `PostcatDir` and every message lands as a flat file in
 [Postfix-compatible](https://www.postfix.org/postcat.1.html) format. Handy
 during setup before you wire up a real backend.
 
 ```go
-srv := smtpgateway.Server{
-	PostcatDir: "/var/spool/mail/incoming",
-}
+srv := smtpgateway.NewServer(handler,
+	smtpgateway.WithPostcatDir("/var/spool/mail/incoming"),
+)
 ```
 
 CLI tools ship in the repo: `cmd/postcat` reads individual files,
@@ -181,10 +179,11 @@ CLI tools ship in the repo: `cmd/postcat` reads individual files,
 provides a `postcat.Parse(path)` function for programmatic access.
 
 → [Postcat guide](docs/postcat.md) (CLI usage, replay, programmatic API)
+→ [Handler guide](docs/handler-guide.md) (Tx lifecycle walkthrough, contract invariants)
 
 ## Logging
 
-Set `Server.Logger` to `smtpgateway.Slog(slog.Default())` for text output,
+Set `Server.Logger` to `smtpgateway.NewSlogLogger(slog.Default())` for text output,
 `nil` to discard, or implement the three-method interface:
 
 ```go
@@ -200,13 +199,13 @@ Use `slog.String`, `slog.Int`, etc. as `args`. Control format via standard
 
 ```go
 // JSON to stderr
-srv.Logger = smtpgateway.Slog(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+srv.Logger = smtpgateway.NewSlogLogger(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 	Level: slog.LevelDebug,
 })))
 
 // Text to a file
 f, _ := os.OpenFile("/var/log/mail.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-srv.Logger = smtpgateway.Slog(slog.New(slog.NewTextHandler(f, nil)))
+srv.Logger = smtpgateway.NewSlogLogger(slog.New(slog.NewTextHandler(f, nil)))
 ```
 
 Key events: `connection_opened`/`closed` (Debug), `smtp_recv`/`data_received`

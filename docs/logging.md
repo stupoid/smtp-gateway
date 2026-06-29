@@ -9,12 +9,13 @@ pairs.
 ```go
 import (
     "log/slog"
-    "github.com/stupoid/smtp-gateway"
+    smtpgateway "github.com/stupoid/smtp-gateway"
 )
 
-srv := &smtpgateway.Server{
-    Logger: smtpgateway.Slog(slog.Default()),
-}
+srv := smtpgateway.NewServer(
+    handler,
+    smtpgateway.WithLogger(smtpgateway.NewSlogLogger(slog.Default())),
+)
 ```
 
 Pass `nil` to discard all server logs.  The handler callbacks use the
@@ -35,7 +36,7 @@ type Logger interface {
 
 The `args` are key=value pairs using `slog.String`, `slog.Int`,
 `slog.Any`, etc.  Building your own adapter is a thin wrapper — see
-`SlogAdapter` in `gateway.go` for the reference implementation.
+`SlogLogger` in `gateway.go` for the reference implementation.
 
 ## Event catalog
 

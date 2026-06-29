@@ -56,14 +56,14 @@ func run() error {
 	}
 	defer func() { _ = ln.Close() }()
 
-	srv := &smtpgateway.Server{
-		Hostname:     "test.local",
-		Handler:      &acceptAllHandler{},
-		PostcatDir:   postcatDir,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
+	srv := smtpgateway.NewServer(
+		&acceptAllHandler{},
+		smtpgateway.WithHostname("test.local"),
+		smtpgateway.WithPostcatDir(postcatDir),
+		smtpgateway.WithReadTimeout(30*time.Second),
+		smtpgateway.WithWriteTimeout(30*time.Second),
+		smtpgateway.WithIdleTimeout(60*time.Second),
+	)
 
 	if *tlsCert != "" && *tlsKey != "" {
 		cert, err := tls.LoadX509KeyPair(*tlsCert, *tlsKey)
