@@ -156,16 +156,11 @@ func Parse(path string) (*Message, error) {
 // findBlankLine returns the byte index of the blank line separator and its
 // length (2 for "\n\n", 4 for "\r\n\r\n"), or (-1, 0) if not found.
 func findBlankLine(b []byte) (int, int) {
-	for i := 0; i < len(b)-1; i++ {
-		if b[i] == '\n' && b[i+1] == '\n' {
-			return i, 2
-		}
+	if i := bytes.Index(b, []byte("\n\n")); i >= 0 {
+		return i, 2
 	}
-	// Also accept "\r\n\r\n" (CRLF blank line).
-	for i := 0; i < len(b)-3; i++ {
-		if b[i] == '\r' && b[i+1] == '\n' && b[i+2] == '\r' && b[i+3] == '\n' {
-			return i, 4
-		}
+	if i := bytes.Index(b, []byte("\r\n\r\n")); i >= 0 {
+		return i, 4
 	}
 	return -1, 0
 }
