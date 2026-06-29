@@ -179,7 +179,7 @@ func TestSMTPBodyPreserveNewlines(t *testing.T) {
 // that the handler receives correctly unstuffed body content.
 func TestSMTPBodyDotUnstuffing(t *testing.T) {
 	// Use a recorder handler to verify the body is unstuffed.
-	h := &dotUnstuffRecorder{}
+	h := &recordingHandler{}
 	srv := &Server{
 		Hostname:    "test.local",
 		Handler:     h,
@@ -218,26 +218,34 @@ func TestSMTPBodyDotUnstuffing(t *testing.T) {
 	expectResp(t, scanner, "250")
 
 	// Verify dot-unstuffing: leading dots on lines should be stripped.
-	if !bytes.Contains(h.body, []byte(".dot-stuffed line")) {
-		t.Errorf("dot-unstuffing failed: expected '.dot-stuffed line', got body: %q", string(h.body))
+	if !bytes.Contains(h.lastBody, []byte(".dot-stuffed line")) {
+		t.Errorf("dot-unstuffing failed: expected '.dot-stuffed line', got body: %q", string(h.lastBody))
 	}
-	if !bytes.Contains(h.body, []byte("..double leading dot")) {
-		t.Errorf("dot-unstuffing failed: expected '..double leading dot', got body: %q", string(h.body))
+	if !bytes.Contains(h.lastBody, []byte("..double leading dot")) {
+		t.Errorf("dot-unstuffing failed: expected '..double leading dot', got body: %q", string(h.lastBody))
 	}
 
 	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
 }
 
-// dotUnstuffRecorder captures the body for dot-unstuffing verification.
-type dotUnstuffRecorder struct {
-	body []byte
+// recordingHandler is a test helper that accepts all recipients and
+// records the body and envelope sender passed to Data.  It is safe
+// for concurrent use and replaces the three formerly separate
+// recorder types (dotUnstuffRecorder, utf8Handler, bdatRecorder).
+type recordingHandler struct {
+	mu         sync.Mutex
+	lastBody   []byte
+	lastSender string
 }
 
-func (h *dotUnstuffRecorder) Hello(_ context.Context, _ *Tx) *Response    { return RespHelloOK }
-func (h *dotUnstuffRecorder) MailFrom(_ context.Context, _ *Tx) *Response { return RespMailOK }
-func (h *dotUnstuffRecorder) RcptTo(_ context.Context, _ *Tx) *Response   { return RespRcptOK }
-func (h *dotUnstuffRecorder) Data(_ context.Context, _ *Tx, body []byte) *Response {
-	h.body = append([]byte{}, body...)
+func (h *recordingHandler) Hello(_ context.Context, _ *Tx) *Response    { return RespHelloOK }
+func (h *recordingHandler) MailFrom(_ context.Context, _ *Tx) *Response { return RespMailOK }
+func (h *recordingHandler) RcptTo(_ context.Context, _ *Tx) *Response   { return RespRcptOK }
+func (h *recordingHandler) Data(_ context.Context, tx *Tx, body []byte) *Response {
+	h.mu.Lock()
+	h.lastBody = append([]byte{}, body...)
+	h.lastSender = tx.MailFrom
+	h.mu.Unlock()
 	return RespDataOK
 }
 
@@ -1065,28 +1073,10 @@ func TestSMTPShutdownDuringTransaction(t *testing.T) {
 // SMTPUTF8 (RFC 6531)
 // ---------------------------------------------------------------------------
 
-// utf8Handler records the body and sender for verification.
-type utf8Handler struct {
-	mu         sync.Mutex
-	lastBody   []byte
-	lastSender string
-}
-
-func (h *utf8Handler) Hello(_ context.Context, _ *Tx) *Response    { return RespHelloOK }
-func (h *utf8Handler) MailFrom(_ context.Context, _ *Tx) *Response { return RespMailOK }
-func (h *utf8Handler) RcptTo(_ context.Context, _ *Tx) *Response   { return RespRcptOK }
-func (h *utf8Handler) Data(_ context.Context, tx *Tx, body []byte) *Response {
-	h.mu.Lock()
-	h.lastBody = append([]byte{}, body...)
-	h.lastSender = tx.MailFrom
-	h.mu.Unlock()
-	return RespDataOK
-}
-
 func TestSMTPUTF8Accepts8BitBody(t *testing.T) {
 	// With SMTPUTF8 declared, 8-bit content must be accepted even without
 	// BODY=8BITMIME (RFC 6531 §3.4).
-	h := &utf8Handler{}
+	h := &recordingHandler{}
 	srv := &Server{
 		Hostname:    "test.local",
 		Handler:     h,
@@ -1167,7 +1157,7 @@ func TestSMTPUTF8Without8BitBody(t *testing.T) {
 
 func TestSMTPUTF8AddressesEndToEnd(t *testing.T) {
 	// UTF-8 characters in envelope addresses should survive the round-trip.
-	h := &utf8Handler{}
+	h := &recordingHandler{}
 	srv := &Server{
 		Hostname:    "mx.münchen.de", // server hostname with UTF-8
 		Handler:     h,
@@ -1214,22 +1204,6 @@ func TestSMTPUTF8AddressesEndToEnd(t *testing.T) {
 // ---------------------------------------------------------------------------
 // BDAT / CHUNKING (RFC 3030)
 // ---------------------------------------------------------------------------
-
-// bdatRecorder records the body passed to Handler.Data for verification.
-type bdatRecorder struct {
-	mu       sync.Mutex
-	lastBody []byte
-}
-
-func (h *bdatRecorder) Hello(_ context.Context, _ *Tx) *Response    { return RespHelloOK }
-func (h *bdatRecorder) MailFrom(_ context.Context, _ *Tx) *Response { return RespMailOK }
-func (h *bdatRecorder) RcptTo(_ context.Context, _ *Tx) *Response   { return RespRcptOK }
-func (h *bdatRecorder) Data(_ context.Context, _ *Tx, body []byte) *Response {
-	h.mu.Lock()
-	h.lastBody = append([]byte{}, body...)
-	h.mu.Unlock()
-	return RespDataOK
-}
 
 func TestSMTPChunkingAdvertised(t *testing.T) {
 	conn, scanner := dialServer(t)
@@ -1306,7 +1280,7 @@ func TestSMTPBDATZeroSize(t *testing.T) {
 }
 
 func TestSMTPBDATSingleChunk(t *testing.T) {
-	rec := &bdatRecorder{}
+	rec := &recordingHandler{}
 	conn, scanner, _ := bdatServer(t, rec)
 	bdatSetup(t, conn, scanner)
 
@@ -1325,7 +1299,7 @@ func TestSMTPBDATSingleChunk(t *testing.T) {
 }
 
 func TestSMTPBDATMultipleChunks(t *testing.T) {
-	rec := &bdatRecorder{}
+	rec := &recordingHandler{}
 	conn, scanner, _ := bdatServer(t, rec)
 	bdatSetup(t, conn, scanner)
 
@@ -1344,7 +1318,7 @@ func TestSMTPBDATMultipleChunks(t *testing.T) {
 }
 
 func TestSMTPBDATBinaryData(t *testing.T) {
-	rec := &bdatRecorder{}
+	rec := &recordingHandler{}
 	conn, scanner, _ := bdatServer(t, rec)
 	bdatSetup(t, conn, scanner)
 
@@ -1439,7 +1413,7 @@ func TestSMTPBDATMessageSizeExceeded(t *testing.T) {
 }
 
 func TestSMTPBDATBadSyntaxClearsBuffer(t *testing.T) {
-	rec := &bdatRecorder{}
+	rec := &recordingHandler{}
 	conn, scanner, _ := bdatServer(t, rec)
 	bdatSetup(t, conn, scanner)
 
@@ -1459,7 +1433,7 @@ func TestSMTPBDATBadSyntaxClearsBuffer(t *testing.T) {
 }
 
 func TestSMTPBDATRsetResets(t *testing.T) {
-	rec := &bdatRecorder{}
+	rec := &recordingHandler{}
 	conn, scanner, _ := bdatServer(t, rec)
 	bdatSetup(t, conn, scanner)
 
@@ -1504,7 +1478,7 @@ func TestSMTPBDATRejectsCommandsDuringSequence(t *testing.T) {
 
 func TestSMTPBDATMultipleSessions(t *testing.T) {
 	// Verify BDAT interleaves cleanly across separate transactions on one connection.
-	rec := &bdatRecorder{}
+	rec := &recordingHandler{}
 	conn, scanner, _ := bdatServer(t, rec)
 	bdatSetup(t, conn, scanner)
 

@@ -132,6 +132,12 @@ func (s *Server) handleConn(netConn net.Conn) {
 			// During a BDAT chunk sequence, only BDAT, RSET, NOOP,
 			// and QUIT are allowed.  DATA/STARTTLS must signal
 			// resumeCh since the reader is paused waiting for them.
+			//
+			// The two-level dispatch (preamble before the main switch)
+			// is intentional: intercepting here is cheaper than adding
+			// a guard to every individual verb handler, and the preamble
+			// is the single choke-point for BDAT state cleanup (bodyBuf)
+			// when a disallowed command arrives mid-sequence.
 			if inBdat && !isAllowedDuringBdat(cmd.verb) {
 				if cmd.verb == "DATA" || cmd.verb == "STARTTLS" {
 					resumeCh <- struct{}{}
@@ -675,6 +681,12 @@ func (s *Server) handleBdat(
 ) *Response {
 	// Signal resumeCh on every return — the reader goroutine is paused
 	// waiting for BDAT processing to finish.
+	//
+	// handleBdat is deliberately kept as a single method despite its
+	// length (~95 lines).  The BDAT state machine requires careful
+	// coordination of inBdat, bodyBuf, resumeCh, and discardChunk;
+	// splitting into helper methods would scatter the critical path
+	// and make the state transitions harder to verify as atomic.
 	defer func() { resumeCh <- struct{}{} }()
 
 	// Apply a read deadline for chunk reads so a slow client doesn't
