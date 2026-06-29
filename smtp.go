@@ -144,7 +144,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 				}
 				// Abandon the BDAT sequence — orphaned chunk data
 				// must not leak into the next BDAT transaction.
-				conn.bodyBuf = nil
+				conn.resetBodyBuf()
 				resp = &Response{503, "5.5.1 Bad sequence of commands"}
 			} else {
 				switch cmd.verb {
@@ -180,7 +180,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 					if resp != nil {
 						phase = phaseHelo
 						tx = s.newTx(netConn)
-						conn.bodyBuf = nil
+						conn.resetBodyBuf()
 					}
 				case "BDAT":
 					resp = s.handleBdat(conn, cmd, tx, phase, &inBdat, resumeCh)
@@ -192,7 +192,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 				case "RSET":
 					resp = &Response{250, "2.0.0 OK"}
 					tx = s.newTx(netConn)
-					conn.bodyBuf = nil
+					conn.resetBodyBuf()
 					phase = phaseInit
 					inBdat = false
 				case "NOOP":
@@ -271,11 +271,14 @@ func (s *Server) readCommands(
 				return
 			}
 			// Pause until worker signals resume (body read / TLS upgrade done).
+			resumeTimer := time.NewTimer(s.ReadTimeout + time.Minute)
 			select {
 			case <-resumeCh:
+				resumeTimer.Stop()
 			case <-conn.ctx.Done():
+				resumeTimer.Stop()
 				return
-			case <-time.After(s.ReadTimeout + time.Minute):
+			case <-resumeTimer.C:
 				s.logError("resume_timeout")
 				return
 			}
@@ -354,10 +357,14 @@ var ErrBadSyntax = errors.New("bad SMTP command syntax")
 // --- Command handlers ---
 
 // validateHeloDomain checks the HELO/EHLO argument for length and
-// character sanity.  RFC 5321 requires a domain name or address
-// literal; we reject control characters and excessively long values
-// as defence-in-depth against downstream handlers that may store or
-// log the domain unsafely.
+// character sanity.  Only control characters and excessively long values
+// (>255 bytes) are rejected.
+//
+// RFC 5321 requires a domain name or address literal, but full validation
+// would reject legitimate HELO names observed in the wild (short hostnames
+// without dots, IPv4 addresses without brackets, etc.).  The control-char
+// filter is sufficient defence-in-depth against downstream handlers that
+// may store or log the domain unsafely.
 func validateHeloDomain(domain string) bool {
 	if len(domain) > 255 {
 		return false
@@ -510,7 +517,7 @@ func (s *Server) handleMail(
 	tx.Rcpts = nil
 	tx.Accepted = nil
 	tx.Rejected = nil
-	conn.bodyBuf = nil
+	conn.resetBodyBuf()
 
 	if s.MaxMessageSize > 0 {
 		if sizeStr, ok := params["SIZE"]; ok {
@@ -576,6 +583,13 @@ func (s *Server) handleData(
 ) *Response {
 	// Signal resumeCh on every return — the reader goroutine is paused
 	// waiting for DATA body reading to finish.
+	//
+	// When DATA is rejected before the body read (phase check, no
+	// accepted recipients), the worker has not consumed any bytes from
+	// the wire.  The reader resumes and will parse the incoming body
+	// lines as SMTP commands — most will yield 500 "Command not
+	// recognised".  This is correct per RFC 5321: after a failed DATA
+	// the client must RSET before starting a new transaction.
 	defer func() { resumeCh <- struct{}{} }()
 
 	if phase < phaseRcpt {
@@ -702,7 +716,7 @@ func (s *Server) handleBdat(
 	// must not trigger a proportional allocation.
 	discardChunk := func() {
 		*inBdat = false
-		conn.bodyBuf = nil
+		conn.resetBodyBuf()
 		if size > 0 {
 			if readTimeout > 0 {
 				conn.SetReadDeadline(time.Now().Add(readTimeout))
@@ -742,7 +756,7 @@ func (s *Server) handleBdat(
 	if err != nil {
 		s.logError("bdat_read_error", slog.String("error", err.Error()))
 		*inBdat = false
-		conn.bodyBuf = nil
+		conn.resetBodyBuf()
 		return &Response{451, "4.3.0 Error reading chunk"}
 	}
 
@@ -773,7 +787,7 @@ func (s *Server) handleBdat(
 		s.writePostcat(tx.MailFrom, tx.Accepted, conn.bodyBuf)
 	}
 
-	conn.bodyBuf = nil
+	conn.resetBodyBuf()
 	return resp
 }
 
@@ -847,6 +861,14 @@ type connState struct {
 	mu      sync.Mutex      // guards writes
 	bodyBuf []byte          // BDAT chunk accumulation
 	ctx     context.Context // per-connection — cancelled on close or shutdown
+}
+
+// resetBodyBuf clears the BDAT chunk accumulation buffer.
+// All paths that abandon in-progress BDAT state (RSET, bad-sequence
+// rejection, read error, LAST-chunk completion) must call this to
+// prevent orphaned chunk data leaking into the next transaction.
+func (c *connState) resetBodyBuf() {
+	c.bodyBuf = nil
 }
 
 func (c *connState) upgradeToTLS(tlsConn net.Conn) {
