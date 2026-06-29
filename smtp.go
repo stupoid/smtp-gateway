@@ -509,10 +509,10 @@ func (s *Server) handleMail(
 	if s.MaxMessageSize > 0 {
 		if sizeStr, ok := params["SIZE"]; ok {
 			size, err := strconv.ParseInt(sizeStr, 10, 64)
-			if err != nil || size < 0 || size > int64(s.MaxMessageSize) {
-				if err != nil {
-					return &Response{501, "5.5.4 Bad SIZE parameter"}
-				}
+			if err != nil || size < 0 {
+				return &Response{501, "5.5.4 Bad SIZE parameter"}
+			}
+			if size > int64(s.MaxMessageSize) {
 				return RespMessageSize
 			}
 		}
