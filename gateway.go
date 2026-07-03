@@ -233,6 +233,11 @@ type ServerOption func(*Server)
 // defaults applied.  Options override defaults; when the same option is
 // passed multiple times, the last one wins.
 //
+// Hostname is resolved eagerly via os.Hostname() (falling back to
+// "localhost").  WithHostname overrides it.  Struct-literal initialization
+// (&Server{Handler: h}) defers hostname resolution to Serve() — reading
+// s.Hostname before Serve() returns an empty string in that path.
+//
 // Struct-literal initialization remains supported — Serve() applies the
 // same defaults for zero-value fields.
 func NewServer(handler Handler, opts ...ServerOption) *Server {
