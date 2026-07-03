@@ -96,7 +96,7 @@ The same `Handler` instance handles all connections concurrently — use
 ## Customising behaviour
 
 | What you want | Struct literal | NewServer option |
-|---|---|
+|---|---|---|
 | Reject at HELO (auth, blocklist) | Return non-250 from `Handler.Hello` |
 | Reject sender | Return non-250 from `Handler.MailFrom` |
 | Accept/reject individual recipients | Return 250/non-250 from `Handler.RcptTo` |

@@ -113,8 +113,8 @@ all fields return to their phaseInit values. No handler callback is invoked.
 ### 7. STARTTLS (optional)
 
 If `TLSConfig` is set, the client can issue STARTTLS during phaseInit or
-phaseHelo. After a successful TLS handshake, `tx.Helo` and the EHLO cache
-are reset — the client must re-issue EHLO. After STARTTLS, `tx.TLS` is
+phaseHelo. After a successful TLS handshake, the server forgets the prior
+HELO/EHLO state — the client must re-issue EHLO. After STARTTLS, `tx.TLS` is
 populated with the connection's TLS state.
 
 ## Handler contract invariants

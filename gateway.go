@@ -113,7 +113,7 @@ type Handler interface {
 }
 
 // Logger is the logging interface used by the server.
-// A *slog.Logger satisfies this via the Slog adapter below.
+// A *slog.Logger satisfies this via the SlogLogger adapter below.
 type Logger interface {
 	Debug(msg string, args ...any)
 	Info(msg string, args ...any)
