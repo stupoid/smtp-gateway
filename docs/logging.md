@@ -65,6 +65,12 @@ The `args` are key=value pairs using `slog.String`, `slog.Int`,
 | `bdat_received` | `bytes` (int), `mail_from` (string), `recipients` (int) | BDAT LAST chunk received, message complete |
 | `8bit_rejected` | `mail_from` (string), `bytes` (int) | Message bounced because 8-bit data arrived without BODY=8BITMIME or SMTPUTF8 |
 
+### Connection limit (Info)
+
+| Event | Keys | Meaning |
+|-------|------|---------|
+| `max_connections_reached` | — | A connection was rejected with 421 because the cap was full |
+
 ### Errors (Error)
 
 | Event | Keys | Meaning |
@@ -80,7 +86,6 @@ The `args` are key=value pairs using `slog.String`, `slog.Int`,
 | `bdat_read_error` | `error` | Body read failed during BDAT chunk |
 | `postcat_write_error` | `error`, `path` (string) | Failed to persist message to postcat dir |
 | `resume_timeout` | — | Reader waited > ReadTimeout + 1 min for worker to finish DATA/STARTTLS/BDAT |
-| `max_connections_reached` | — | New connection rejected because connSem is full |
 
 ### Startup (Info)
 

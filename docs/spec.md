@@ -48,7 +48,7 @@ A change to a clause follows the protocol in §16.
 | S3 | `Serve` MUST default zero-value fields: `Hostname` from `os.Hostname()` (fallback `localhost`), `MaxMessageSize` to 25 MiB, `ReadTimeout` to 5 minutes, `IdleTimeout` to 5 minutes. | ok |
 | S4 | `NewServer` MUST apply the same defaults eagerly and then apply options in order. The last option for a field wins. | ok |
 | S5 | `MaxMessageSize == 0` MUST mean the default. It MUST NOT be possible to disable the size limit. | ok |
-| S6 | `MaxConnections == 0` MUST mean unlimited. A positive value MUST cap concurrent connections. | ok |
+| S6 | `MaxConnections == 0` MUST mean unlimited. A positive value MUST cap concurrent connections. A rejected connection MUST receive 421 before the server closes it. | ok |
 | S7 | Callers MUST NOT read or mutate `Server` fields after `Serve` starts. `Serve` is not safe for concurrent configuration. | contract |
 | S8 | `Serve` MUST return `nil` when `Accept` fails after `Shutdown`, and the listener error otherwise. | ok* |
 | S9 | `Shutdown` MUST stop new work, cancel connection contexts, force-close stuck connections after 50 ms, and wait for handlers to return or for `ctx` to expire. | ok |
@@ -160,7 +160,7 @@ reading the code and by the concurrency tests.
 | ID | Requirement | Status |
 |---|---|---|
 | G1 | `Server.Logger` MUST accept any implementation of the three-method `Logger`. A nil `Logger` MUST discard all events. | ok |
-| G2 | Levels MUST follow the event catalog in `docs/logging.md`: connection lifecycle at Debug, command and message events at Info, failures at Error. | ok |
+| G2 | Levels MUST follow the event catalog in `docs/logging.md`: connection lifecycle at Debug, command, message, and capacity events at Info, failures at Error. | ok |
 | G3 | Event names and keys MUST match `docs/logging.md`. Change the code and the catalog in one commit. | ok |
 | G4 | Logged client input MUST have control characters removed and MUST be length-bounded. | ok |
 | G5 | The default Info stream SHOULD NOT contain full envelope addresses. It currently does (`smtp_recv`). Operators MUST treat the log stream as personal data. | gap (X17) |
@@ -218,7 +218,6 @@ date and an owner, not a licence to keep the behaviour.
 | X12 | Medium | Q5 | `go.mod` declares Go 1.21. CI tests only 1.26, so a dependency or syntax that raises the floor is not caught. | `go.mod:3`, `.github/workflows/ci.yml` | Add a CI job with `go-version-file: go.mod`. |
 | X13 | Medium | Q4 | No fuzz targets exist. All four CLI packages have 0% coverage. | `grep -r "func Fuzz" .` returns nothing; `go tool cover` | Add fuzz tests for the parsers and body reader. Add one test per CLI. |
 | X14 | Low | Q6 | The repository has no tags. `go get` resolves a pseudo-version. | `git tag` is empty | Tag `v0.1.0` when the API is ready. |
-| X15 | Low | S6 | Rejected connections at `MaxConnections` are closed with no 421 and logged at Error. A flood of connections floods the error log. | `gateway.go:351-358` | Send a 421 with a short deadline, then close. Log at Info or rate-limit. |
 | X16 | Low | P16 | HELP returns 500. RFC 5321 §4.1.1.8 says servers SHOULD support it. | `smtp.go:205-207` | Return a short 214 multi-line reply. |
 | X17 | Medium | G5 | `smtp_recv` logs the full command arguments at Info, including sender and recipient addresses. | `smtp.go:260-263` | Log the verb at Info and the arguments at Debug, or add a redaction option. Document the change. |
 

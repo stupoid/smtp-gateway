@@ -268,7 +268,7 @@ The caller must close the listener. `Shutdown` does not close it (S10).
 | Reader panic | Recover, log `reader_panic`, close | Socket closed, no reply |
 | Write error | Worker returns | Socket closed |
 | TLS handshake failure | Log, close | TLS alert or reset |
-| `MaxConnections` full | Close immediately, log | Socket closed, no 421 (X15) |
+| `MaxConnections` full | Write 421, close, log at Info | 421, then close |
 | Shutdown | 421 when the socket is still open | 421, then close |
 
 A silent close is valid SMTP behaviour for a broken session, but a client sees

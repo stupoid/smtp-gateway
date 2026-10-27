@@ -2018,18 +2018,23 @@ func TestSMTPMaxConnectionsEnforced(t *testing.T) {
 	sendAndExpect(t, conn2, scanner2, "EHLO c2\r\n", "250")
 	_ = readMultiline(t, scanner2)
 
-	// Phase 2: third connection is accepted by TCP but immediately
-	// closed by the server (connSem is full).  The read yields EOF
-	// — no banner, no SMTP response.
+	// Phase 2: third connection is accepted by TCP, gets a 421, and is
+	// closed because connSem is full.
 	conn3, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatalf("dial conn3: %v", err)
 	}
 	defer func() { _ = conn3.Close() }()
-	_ = conn3.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	_ = conn3.SetReadDeadline(time.Now().Add(2 * time.Second))
 	scanner3 := bufio.NewScanner(conn3)
+	if !scanner3.Scan() {
+		t.Fatal("conn3 should receive a 421 reply")
+	}
+	if !strings.HasPrefix(scanner3.Text(), "421") {
+		t.Errorf("conn3 reply = %q, want 421", scanner3.Text())
+	}
 	if scanner3.Scan() {
-		t.Errorf("conn3 should not receive banner, got: %s", scanner3.Text())
+		t.Errorf("conn3 should be closed after 421, got: %s", scanner3.Text())
 	}
 
 	// Phase 3: release conn1's slot and verify a new connection is

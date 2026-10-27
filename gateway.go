@@ -376,8 +376,13 @@ func (s *Server) Serve(ln net.Listener) error {
 			select {
 			case s.connSem <- struct{}{}:
 			default:
+				// A short write deadline keeps a flood from blocking
+				// Accept.  The reply lets the client distinguish this
+				// from a network failure.
+				_ = conn.SetWriteDeadline(time.Now().Add(time.Second))
+				_, _ = conn.Write([]byte("421 4.3.0 Too many connections\r\n"))
 				_ = conn.Close()
-				s.logError("max_connections_reached")
+				s.logInfo("max_connections_reached")
 				continue
 			}
 		}
