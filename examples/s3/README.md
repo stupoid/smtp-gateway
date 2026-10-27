@@ -1,8 +1,9 @@
 # s3-gateway
 
 SMTP gateway that stores accepted messages as S3 objects. Each message is
-written in [Postfix `postcat(1)`](https://www.postfix.org/postcat.1.html)
-format — envelope records followed by a blank line and the raw RFC 5322 body —
+written in a Postfix-style postcat format: the S/R/T record letters that
+[Postfix `postcat(1)`](https://www.postfix.org/postcat.1.html) uses, followed by a
+blank line and the raw RFC 5322 body —
 then gzip-compressed before upload. Envelope metadata is attached as S3 object
 metadata for queryability.
 

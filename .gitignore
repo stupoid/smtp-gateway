@@ -26,3 +26,8 @@ _debug/
 
 # Compound Engineering local config
 .compound-engineering/*.local.yaml
+
+# Local Go caches (sandboxed agents)
+/.gocache
+/.gopath
+/.golangci-cache

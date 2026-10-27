@@ -1,18 +1,20 @@
 # Postcat format guide
 
-Postcat files are the on-disk persistence format used by smtp-gateway.
-They follow the same layout as Postfix's
-[postcat(1)](https://www.postfix.org/postcat.1.html) output: envelope
-records, a blank separator line, and the raw RFC 5322 message body.
+Postcat files are the on-disk persistence format used by smtp-gateway. They
+borrow the record letters from Postfix: `S` for sender, `R` for recipient, `T`
+for time. The layout is Postfix-style, not the Postfix queue-file format.
+Postfix tools expect the queue-file format, and `postcat(1)` does not produce
+this layout.
+
+The normative rules are clauses F1 to F10 in [spec.md](spec.md).
 
 ## References
 
-- [Postfix postcat(1)](https://www.postfix.org/postcat.1.html) — the
-  original format this implementation follows
-- [RFC 5321](https://datatracker.ietf.org/doc/html/rfc5321) — SMTP
-  (envelope, relay)
-- [RFC 5322](https://datatracker.ietf.org/doc/html/rfc5322) — Internet
-  Message Format (headers + body structure)
+- [Postfix postcat(1)](https://www.postfix.org/postcat.1.html): prints Postfix
+  queue files in human-readable form. Related, not compatible
+- [RFC 5321](https://datatracker.ietf.org/doc/html/rfc5321): SMTP envelope
+- [RFC 5322](https://datatracker.ietf.org/doc/html/rfc5322): message format
+- [RFC 3339](https://datatracker.ietf.org/doc/html/rfc3339): timestamp format
 
 ## File format
 
@@ -25,47 +27,60 @@ T <RFC3339 timestamp>\n
 <raw RFC 5322 message>
 ```
 
-- **S line** — envelope sender.  The null sender `<>` is normalised to
-  `S <>`.
-- **R lines** — one per accepted recipient, in the order RCPT TO was
-  received.
-- **T line** — server-local timestamp at write time, RFC 3339 format.
-- **Blank line** — separates envelope metadata from the message body.
-  The body is dot-unstuffed, raw RFC 5322 (headers + body).
+- **S line**: envelope sender. The null sender is written as `S <>`.
+- **R lines**: one per accepted recipient, in RCPT order. A message with no
+  accepted recipient has no R line; the server does not write such a file.
+- **T line**: local time at write, in RFC 3339 format.
+- **Blank line**: separates the envelope from the body.
+- **Body**: dot-unstuffed raw RFC 5322 bytes. No trailing CRLF is added.
 
-Newlines in addresses are stripped before writing to prevent record
-injection.
+CR and LF are stripped from addresses before writing. Without this, an address
+containing `\nS attacker@evil.com` could inject a fake envelope record.
+
+File names are `<unix>-<nanosecond>-<random>.eml`. Files are created with mode
+0600. The directory is created with mode 0750 when `PostcatDir` is set.
+
+## Durability
+
+The writer uses `CreateTemp`, flush, fsync, close, rename. The rename is atomic:
+a reader sees the completed file or nothing. The directory is not fsynced, so a
+power loss can lose the file even though the process returned success (gap X9).
+
+The server calls the writer after `Handler.Data` has returned 250. A write
+failure is logged as `postcat_write_error` and does not change the SMTP reply.
+Do not use this sink as a durable queue.
 
 ## CLI tools
 
-### postcat — inspect a file
+### postcat: inspect a file
 
 ```
 postcat <file.eml>
 ```
 
-Prints the decoded envelope and body to stdout.  Use for debugging or
-manual inspection.
+Prints the envelope and the raw message. Use for debugging or manual
+inspection. `-h` prints usage.
 
-### postcat-replay — re-inject into an SMTP server
+### postcat-replay: re-inject into an SMTP server
 
 ```
-postcat-replay [-addr smtp://127.0.0.1:2525] <file.eml>...
+postcat-replay -addr 127.0.0.1:2525 <file.eml>...
 ```
 
-Reads postcat files, dials the target SMTP server, and replays each
-message via standard SMTP commands (EHLO, MAIL FROM, RCPT TO, DATA).
-Useful for testing handler logic against historical traffic or
-re-delivering messages after a config change.
+Reads postcat files, dials the target, and replays each message with EHLO, MAIL
+FROM, RCPT TO, and DATA. The body is dot-stuffed and line endings are
+normalised. The tool reads multi-line replies. It handles no STARTTLS.
 
-### verify-postcat — batch validation
+`-addr` takes a `host:port` pair. It does not accept a URL scheme.
+
+### verify-postcat: batch validation
 
 ```
 verify-postcat <directory>
 ```
 
-Scans a directory of postcat files and reports parse errors.  Use for
-health checks on your postcat archive.
+Scans every entry in the directory, parses it, and exits non-zero on the first
+parse error. Use it as a health check on an archive.
 
 ## Programmatic API
 
@@ -73,15 +88,17 @@ health checks on your postcat archive.
 import "github.com/stupoid/smtp-gateway/internal/postcat"
 ```
 
+The package is `internal`, so only code in this module can import it. If you
+need it from another module, ask for an exported package.
+
 ### Writing
 
 ```go
 path, err := postcat.Write("/var/spool/postcat", mailFrom, accepted, body)
 ```
 
-Atomically writes a message (CreateTemp + fsync + Rename).  The
-filename is `<unix>-<nanosecond>-<random>.eml`.  Returns the full path
-on success.
+Writes one message and returns the full path. The write is atomic at the
+directory-entry level.
 
 ### Reading
 
@@ -89,25 +106,30 @@ on success.
 msg, err := postcat.Parse("/var/spool/postcat/1719446400-123456789-1a2b3c4d.eml")
 fmt.Println(msg.Sender)      // envelope sender
 fmt.Println(msg.Recipients)  // envelope recipients
-fmt.Println(msg.Time)        // timestamp from T record
-fmt.Println(msg.RawMessage)  // raw RFC 5322 body
+fmt.Println(msg.Time)        // timestamp from the T record
+fmt.Println(msg.RawMessage)  // raw RFC 5322 bytes
 ```
+
+`Parse` reads the envelope up to the first blank line. A CRLF file whose body
+contains an LF-only blank line can be split at the wrong offset (gap X7). A
+missing `T` record leaves `Time` zero. A malformed `T` record is an error.
 
 ### Building envelope bytes
 
 ```go
 raw := postcat.FormatEnvelope(mailFrom, accepted, time.Now(), body)
-// raw is the complete postcat-format []byte — write to S3, gzip, etc.
+// raw is the complete postcat file; write to S3, gzip, etc.
 ```
 
-`FormatEnvelope` is the single authority for the wire format.  Use it
-instead of hand-rolling S/R/T lines so format changes stay in one
-place.
+`FormatEnvelope` produces the record section and body. `Write` currently repeats
+the same formatting instead of calling it (gap X11). Both produce the same
+bytes; keep the timestamp format and the record order in one place when you
+change either.
 
 ### Utility
 
 ```go
-postcat.FormatNullSender("")   // "<>"
-postcat.FormatNullSender("<>") // "<>"
-postcat.FormatNullSender("sender@example.com") // "sender@example.com"
+postcat.FormatNullSender("")                    // "<>"
+postcat.FormatNullSender("<>")                  // "<>"
+postcat.FormatNullSender("sender@example.com")  // "sender@example.com"
 ```

@@ -1,5 +1,5 @@
 // s3-gateway is an SMTP gateway server that stores accepted messages
-// as S3 objects. Each message is written in Postfix postcat(1) format —
+// as S3 objects. Each message is written in a Postfix-style postcat format —
 // envelope records followed by a blank line and the raw RFC 5322 body —
 // gzip-compressed, with envelope metadata attached as S3 object metadata
 // for queryability.
@@ -335,7 +335,6 @@ func objectKey(prefix string, t time.Time, hash string) string {
 		hash,
 	)
 }
-
 
 // ---- env helpers ----
 

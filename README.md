@@ -1,7 +1,11 @@
 # smtp-gateway
 
-SMTP gateway library for Go. Accept inbound email and route it anywhere —
-S3, Kafka, the local filesystem, `/dev/null`, whatever.
+SMTP gateway library for Go. Accept inbound email and route it anywhere:
+S3, Kafka, the local filesystem, `/dev/null`.
+
+Status: pre-1.0. No tagged release yet, so `go get` resolves a pseudo-version.
+The public API can change between commits. The normative behaviour is in
+[docs/spec.md](docs/spec.md).
 
 ## Install
 
@@ -71,6 +75,10 @@ func main() {
 }
 ```
 
+The caller owns the listener. `Serve` returns when the listener closes.
+`Shutdown(ctx)` waits for in-flight connections; close the listener to unblock
+`Serve`.
+
 ## Handler contract
 
 Your handler implements four callbacks, called **serially per connection**:
@@ -80,18 +88,30 @@ Your handler implements four callbacks, called **serially per connection**:
 | `Hello` | After HELO/EHLO | `tx.Helo`, `tx.RemoteAddr` |
 | `MailFrom` | After MAIL FROM | `tx.MailFrom`, `tx.Params` |
 | `RcptTo` | Per RCPT TO | `tx.Rcpts` (all), `tx.Accepted` (accepted subset) |
-| `Data` | After final `.` | Raw RFC 5322 body; only called if ≥1 rcpt accepted |
+| `Data` | After final `.` or BDAT LAST | Raw RFC 5322 body; only called if at least one recipient was accepted |
 
-The same `Handler` instance handles all connections concurrently — use
-`sync.Mutex` or channels if you hold mutable state.
+The same `Handler` instance handles all connections concurrently. Use
+`sync.Mutex` or channels if you hold mutable state. Callbacks for one connection
+are serial, so per-connection state needs no lock.
 
 ### Common pitfalls
 
-- **`nil` → 503.** Returning `nil` from any callback sends `503 Bad sequence`.
-  Use the `Resp*` constants (`RespHelloOK`, `RespMailOK`, etc.) to accept.
-- **STARTTLS needs `TLSConfig` set before `Serve`.** The EHLO banner is built
-  once per connection, not lazily.
-- **Don't mutate `tx`.** It's owned by the server; read only.
+- **`nil` becomes 503.** Returning `nil` from any callback sends
+  `503 5.5.1 Bad sequence of commands`. Use the `Resp*` constants to accept.
+- **`TLSConfig` makes STARTTLS mandatory.** When `TLSConfig` is set, `MAIL`
+  returns `530 5.7.0 STARTTLS required first` until the client upgrades. There
+  is no opportunistic-TLS mode yet (gap X5). This is stricter than RFC 3207
+  §3.1 requires for a public MX.
+- **SMTPS does not set `Tx.TLS`.** A `tls.Listener` works, but `Tx.TLS` is only
+  populated by STARTTLS, so a handler on port 465 cannot inspect the peer
+  certificate (gap X3).
+- **Don't mutate `tx`.** The server owns it; read only.
+- **Copy the body if you keep it.** The server does not promise the slice's
+  lifetime after the callback returns.
+- **Configure before `Serve`.** Server fields are read concurrently by
+  connections. Changing them after `Serve` starts is a data race.
+- **`IdleTimeout` currently has no effect.** When `ReadTimeout` is set,
+  `readLine` overwrites the idle deadline (gap X19).
 
 ## Customising behaviour
 
@@ -100,8 +120,8 @@ The same `Handler` instance handles all connections concurrently — use
 | Reject at HELO (auth, blocklist) | Return non-250 from `Handler.Hello` |
 | Reject sender | Return non-250 from `Handler.MailFrom` |
 | Accept/reject individual recipients | Return 250/non-250 from `Handler.RcptTo` |
-| Store/reject message body | `Handler.Data` gets raw bytes |
-| Enable STARTTLS | `Server.TLSConfig` | `WithTLSConfig(cfg)` |
+| Store or reject the message body | `Handler.Data` gets the raw bytes |
+| Enable STARTTLS (and require it) | `Server.TLSConfig` | `WithTLSConfig(cfg)` |
 | Enable SMTPS (implicit TLS) | Pass a `tls.Listener` to `Serve` |
 | Limit message size | `Server.MaxMessageSize` | `WithMaxMessageSize(n)` |
 | Limit recipients | `Server.MaxRecipients` | `WithMaxRecipients(n)` |
@@ -128,6 +148,10 @@ ln, _ := net.Listen("tcp", ":587")
 srv.Serve(ln)
 ```
 
+With `TLSConfig` set, the server advertises STARTTLS and **requires** it.
+Plaintext `MAIL` gets 530. For an opportunistic setup, leave `TLSConfig` nil
+until a require-TLS option lands (gap X5).
+
 For implicit TLS (SMTPS, port 465), wrap the listener:
 
 ```go
@@ -135,37 +159,41 @@ ln, _ := net.Listen("tcp", ":465")
 srv.Serve(tls.NewListener(ln, tlsConfig))
 ```
 
+The SMTPS path works, but `Tx.TLS` stays nil (gap X3).
+
 ## Protocol support
 
 | Feature | Status |
 |---|---|
-| EHLO / HELO | ✅ |
-| PIPELINING (RFC 2920) | ✅ |
-| STARTTLS (RFC 3207) | ✅ |
-| SMTPS (implicit TLS) | ✅ via `tls.Listener` |
-| 8BITMIME | ✅ enforcement |
-| ENHANCEDSTATUSCODES | ✅ |
-| SMTPUTF8 | ✅ |
-| SIZE | ✅ always advertised (default 25 MiB) |
-| CHUNKING / BDAT (RFC 3030) | ✅ |
-| Graceful shutdown | ✅ |
+| EHLO / HELO | Yes |
+| PIPELINING (RFC 2920) | Yes |
+| STARTTLS (RFC 3207) | Yes, required when configured (X5) |
+| SMTPS (implicit TLS) | Yes via `tls.Listener`; `Tx.TLS` not populated (X3) |
+| 8BITMIME | Advertised; enforced for DATA only |
+| ENHANCEDSTATUSCODES | Advertised; the 354 reply has no 2.x.x code |
+| SMTPUTF8 | Advertised; 8-bit bodies accepted with `SMTPUTF8` |
+| SIZE | Always advertised (default 25 MiB) |
+| CHUNKING / BDAT (RFC 3030) | Yes |
+| Graceful shutdown | Yes; the caller closes the listener |
+| Re-EHLO in one session | Rejected with 503 (X1) |
+
+`README.md` claims and the code can differ. The spec wins.
 
 ### No SMTP AUTH
 
-This is an **inbound gateway** — it receives mail from the internet on port 25
+This is an **inbound gateway**. It receives mail from the internet on port 25
 and routes it to storage. MX delivery is unauthenticated by design.
 
-For access control, use the callbacks you already have: check
-`tx.RemoteAddr` in `Hello`, inspect `tx.MailFrom`, or use mutual TLS
-(`tls.Config.ClientAuth`). If you need full submission with AUTH (port 587),
-try [mox](https://github.com/mjl-/mox) or
+For access control, use the callbacks: check `tx.RemoteAddr` in `Hello`, inspect
+`tx.MailFrom`, or use mutual TLS (`tls.Config.ClientAuth`). If you need
+submission with AUTH (port 587), use [mox](https://github.com/mjl-/mox) or
 [go-smtp](https://github.com/emersion/go-smtp).
 
 ## Postcat sink
 
-Set `PostcatDir` and every message lands as a flat file in
-[Postfix-compatible](https://www.postfix.org/postcat.1.html) format. Handy
-during setup before you wire up a real backend.
+Set `PostcatDir` and every accepted message lands as one flat file. The format
+is Postfix-style: envelope records, a blank line, then the raw message. It is
+not the Postfix queue-file format, and it is not intended for Postfix tools.
 
 ```go
 srv := smtpgateway.NewServer(handler,
@@ -173,18 +201,22 @@ srv := smtpgateway.NewServer(handler,
 )
 ```
 
+The write is best effort. The handler has already returned 250, so a disk
+failure is logged and the client still gets 250. Do not use this sink where
+durability matters.
+
 CLI tools ship in the repo: `cmd/postcat` reads individual files,
 `cmd/postcat-replay` replays them through any SMTP server, and
 `cmd/verify-postcat` does batch verification. The `internal/postcat` package
-provides a `postcat.Parse(path)` function for programmatic access.
+provides `postcat.Parse(path)` for programmatic access.
 
-→ [Postcat guide](docs/postcat.md) (CLI usage, replay, programmatic API)
-→ [Handler guide](docs/handler-guide.md) (Tx lifecycle walkthrough, contract invariants)
+→ [Postcat guide](docs/postcat.md)
+→ [Handler guide](docs/handler-guide.md)
 
 ## Logging
 
-Set `Server.Logger` to `smtpgateway.NewSlogLogger(slog.Default())` for text output,
-`nil` to discard, or implement the three-method interface:
+Set `Server.Logger` to `smtpgateway.NewSlogLogger(slog.Default())` for text
+output, `nil` to discard, or implement the three-method interface:
 
 ```go
 type Logger interface {
@@ -208,27 +240,48 @@ f, _ := os.OpenFile("/var/log/mail.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 06
 srv.Logger = smtpgateway.NewSlogLogger(slog.New(slog.NewTextHandler(f, nil)))
 ```
 
-Key events: `connection_opened`/`closed` (Debug), `smtp_recv`/`data_received`
-(Info), `read_error`/`tls_handshake_error` (Error).
+Key events: `connection_opened` / `connection_closed` (Debug), `smtp_recv` /
+`data_received` (Info), `read_error` / `tls_handshake_error` (Error).
+
+`smtp_recv` logs every command with its arguments at Info, including envelope
+addresses. Treat the log stream as personal data (gap X17).
 
 → [Logging guide](docs/logging.md) (full event catalog, custom adapters)
 
 ## How it works
 
-Each connection spawns two primary goroutines plus a cleanup goroutine:
+Each connection runs three goroutines:
 
-1. **Reader** — reads lines, parses SMTP verbs, pushes into a buffered channel
-   (depth 32). This enables RFC 2920 PIPELINING.
-2. **Worker** — receives from the channel and dispatches to your handler
-   callbacks.
-3. **Cleanup** — waits for server shutdown, then force-closes the connection
-   to unblock stuck reads.
+1. **Reader**: reads lines, parses SMTP verbs, and pushes commands into a
+   buffered channel (depth 32). This is what enables PIPELINING.
+2. **Worker**: receives from the channel and dispatches to your callbacks.
+3. **Watchdog**: waits for shutdown, then closes the connection to unblock a
+   stuck body read or TLS handshake.
 
-During DATA and STARTTLS the reader **pauses** so the worker can take
-exclusive control of the connection (reading the body, or performing the TLS
-handshake). After RSET or successful DATA, transaction state resets.
+During DATA, BDAT, and STARTTLS the reader **pauses** so the worker can take
+exclusive control of the connection. After RSET or a completed transaction, the
+transaction state resets.
 
-→ [Full architecture](docs/architecture.md) (diagram, Tx fields, goroutine details)
+→ [Architecture](docs/architecture.md)
+→ [Specification](docs/spec.md)
+
+## Documentation
+
+| Document | Purpose |
+|---|---|
+| [docs/spec.md](docs/spec.md) | Normative clauses and known gaps |
+| [docs/architecture.md](docs/architecture.md) | How the code implements the spec |
+| [docs/decisions.md](docs/decisions.md) | Why the design is what it is |
+| [docs/handler-guide.md](docs/handler-guide.md) | Phase-by-phase handler walkthrough |
+| [docs/postcat.md](docs/postcat.md) | Postcat format and CLI tools |
+| [docs/logging.md](docs/logging.md) | Log event catalog |
+| [CONCEPTS.md](CONCEPTS.md) | Vocabulary |
+| [AGENTS.md](AGENTS.md) | Guide for contributors and coding agents |
+
+## Contributing
+
+Read `AGENTS.md`. Run `make check` before you commit. A behaviour change needs a
+spec clause, a test, and the documents in the same commit.
 
 ## License
 

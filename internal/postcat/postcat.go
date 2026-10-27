@@ -1,8 +1,11 @@
-// Package postcat provides reading and writing of postcat-format envelope
-// files, compatible with Postfix's postcat(1) output format.
+// Package postcat reads and writes postcat-format envelope files.
 //
-// Files contain envelope records (S, R, T lines) followed by a blank line
-// and the raw RFC 5322 message body.
+// The layout borrows the S, R, and T record letters that Postfix writes in
+// queue files. It is not the Postfix queue-file format, and Postfix tools
+// do not expect it.
+//
+// A file contains envelope records (S, R, T lines), a blank line, and the
+// raw RFC 5322 message body.
 package postcat
 
 import (
@@ -27,8 +30,8 @@ type Message struct {
 
 // FormatEnvelope returns the complete postcat-format bytes for a message:
 // envelope records (S, R, T lines), a blank separator, and the raw body.
-// This is the single authority for the postcat wire format — use it instead
-// of hand-rolling S/R/T lines so format changes stay in one place.
+// This is the reference layout. Write streams the same records to disk;
+// keep the two in sync.
 func FormatEnvelope(mailFrom string, accepted []string, t time.Time, body []byte) []byte {
 	var buf bytes.Buffer
 
@@ -48,9 +51,10 @@ func FormatEnvelope(mailFrom string, accepted []string, t time.Time, body []byte
 // prevents collisions under concurrent writes) and contains envelope
 // records followed by a blank line and the raw message.
 //
-// The write is atomic: data is written to a temporary file and renamed
-// into place on success.  This prevents both partial-file artefacts and
-// filename collisions under concurrent writes.
+// The write is atomic in the directory: data is written to a temporary
+// file and renamed into place on success.  This prevents both partial-file
+// artefacts and filename collisions under concurrent writes.  The
+// directory is not fsynced, so the file may not survive a power loss.
 func Write(dir, mailFrom string, accepted []string, body []byte) (string, error) {
 	now := time.Now()
 	var rnd [4]byte

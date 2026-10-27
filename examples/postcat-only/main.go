@@ -1,5 +1,5 @@
 // postcat-only is a minimal SMTP gateway server that persists every accepted
-// message as a Postfix-compatible postcat file on disk.  No cloud credentials,
+// message as a Postfix-style postcat file on disk.  No cloud credentials,
 // no compression — just drop mail into a directory.
 //
 // Configuration is via environment variables:

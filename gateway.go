@@ -92,7 +92,8 @@ type Tx struct {
 // Callbacks for a single connection are always serial.
 type Handler interface {
 	// Hello is called after the client sends HELO or EHLO.
-	// Return a non-250 response to reject the connection.
+	// Return a non-250 response to reject the greeting.  The session
+	// stays open, but it cannot start a transaction.
 	Hello(ctx context.Context, tx *Tx) *Response
 
 	// MailFrom is called after MAIL FROM.  The envelope sender is in
@@ -165,6 +166,9 @@ type Server struct {
 	// TLSConfig enables STARTTLS when non-nil.  The server
 	// advertises STARTTLS in EHLO and upgrades the connection
 	// when the client issues the command.
+	//
+	// Setting this field also makes TLS required: MAIL returns 530
+	// until the connection is encrypted.
 	TLSConfig *tls.Config
 
 	// Handler receives callbacks for each SMTP transaction phase.
@@ -173,9 +177,9 @@ type Server struct {
 
 	// MaxMessageSize is the maximum message size in bytes.
 	// Defaults to 25 MiB (enforced in Serve).  The zero value is
-	// overridden — there is no way to disable the limit.  SIZE is
-	// advertised in EHLO and messages exceeding the limit are
-	// rejected during DATA and BDAT.
+	// overridden.  A negative value disables the limit and the SIZE
+	// advertisement; do not use one.  SIZE is advertised in EHLO and
+	// messages exceeding the limit are rejected during DATA and BDAT.
 	MaxMessageSize int
 
 	// MaxRecipients is the maximum number of RCPT TO commands
@@ -196,8 +200,10 @@ type Server struct {
 	// WriteTimeout is the per-response write deadline.  0 means no deadline.
 	WriteTimeout time.Duration
 
-	// IdleTimeout closes the connection after this duration of inactivity.
-	// Defaults to 5 minutes.  The timer resets on each successful read.
+	// IdleTimeout is the intended inactivity limit.  Defaults to
+	// 5 minutes.  The current code overwrites this deadline with
+	// ReadTimeout before each read, so it has no effect when
+	// ReadTimeout is non-zero.
 	IdleTimeout time.Duration
 
 	// Logger receives structured log events.  If nil, logging is
@@ -206,9 +212,10 @@ type Server struct {
 	Logger Logger
 
 	// PostcatDir, when non-empty, causes the server to write each
-	// accepted message as a Postfix-queue-file-compatible file in
-	// this directory (see internal/postcat).  The directory is
-	// created with mode 0750 if it does not exist.
+	// accepted message as a Postfix-style file in this directory
+	// (see internal/postcat).  The format is not the Postfix queue
+	// file format.  The directory is created with mode 0750 if it
+	// does not exist.
 	//
 	// Postcat writes are best-effort: the file is written after
 	// Handler.Data returns 250.  If the write fails (disk full,
@@ -284,7 +291,7 @@ func WithIdleTimeout(v time.Duration) ServerOption { return func(s *Server) { s.
 func WithLogger(v Logger) ServerOption { return func(s *Server) { s.Logger = v } }
 
 // WithPostcatDir sets the postcat output directory.  When non-empty,
-// accepted messages are written as Postfix-compatible files.
+// accepted messages are written as Postfix-style files.
 func WithPostcatDir(v string) ServerOption { return func(s *Server) { s.PostcatDir = v } }
 
 // NewSlogLogger returns a Logger backed by l.  If l is nil, the returned
@@ -363,9 +370,10 @@ func (s *Server) Serve(ln net.Listener) error {
 	}
 }
 
-// Shutdown gracefully stops the server.  It stops accepting new
-// connections and waits for active connections to finish or ctx to
-// expire.  The caller must still close the listener to unblock Serve.
+// Shutdown cancels the server context and waits for active connections
+// to finish or for ctx to expire.  It does not close the listener, so
+// Serve keeps blocking in Accept until the caller closes it.  Calling
+// Shutdown more than once is safe.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.shutdownOnce.Do(func() {
 		if s.cancel != nil {

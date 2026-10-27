@@ -1,8 +1,12 @@
 # Logging guide
 
 smtp-gateway logs at three levels: Debug, Info, and Error.  The `Logger`
-interface follows `log/slog` conventions — all variadic args are key=value
-pairs.
+interface follows `log/slog` conventions: all variadic args are key=value
+pairs. The event catalog below is normative; see clause G3 in
+[spec.md](spec.md).
+
+The Info stream contains envelope addresses (`smtp_recv`, `data_received`).
+Treat it as personal data and set retention accordingly (gap X17).
 
 ## Quick start
 
@@ -59,14 +63,14 @@ The `args` are key=value pairs using `slog.String`, `slog.Int`,
 |-------|------|---------|
 | `data_received` | `bytes` (int), `mail_from` (string), `recipients` (int) | DATA command body fully received |
 | `bdat_received` | `bytes` (int), `mail_from` (string), `recipients` (int) | BDAT LAST chunk received, message complete |
-| `8bit_rejected` | `mail_from` (string) | Message bounced because 8-bit data arrived without BODY=8BITMIME |
+| `8bit_rejected` | `mail_from` (string), `bytes` (int) | Message bounced because 8-bit data arrived without BODY=8BITMIME or SMTPUTF8 |
 
 ### Errors (Error)
 
 | Event | Keys | Meaning |
 |-------|------|---------|
 | `banner_write_error` | `error` | Failed to write 220 banner |
-| `read_error` | `error` | Reader goroutine read failure (timeout, EOF, buffer overflow) |
+| `read_error` | `error` | Reader goroutine read failure other than a timeout or EOF (for example, an over-long line) |
 | `write_error` | `error` | Worker goroutine write failure |
 | `handler_panic` | `panic` (any) | Panic recovered in worker goroutine |
 | `reader_panic` | `panic` (any) | Panic recovered in reader goroutine |

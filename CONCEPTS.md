@@ -1,37 +1,145 @@
 # Concepts
 
-Shared domain vocabulary for this project — entities, named processes, and status concepts with project-specific meaning. Seeded with core domain vocabulary, then accretes as ce-compound and ce-compound-refresh process learnings; direct edits are fine. Glossary only, not a spec or catch-all.
+Shared vocabulary for this project. This is a glossary, not a spec. The rules
+live in [docs/spec.md](docs/spec.md). Use these terms in code, comments, logs,
+and documents. Do not rotate synonyms.
 
-## Core Components
+## Core components
 
 ### Server
 
-The SMTP gateway server that accepts connections from a `net.Listener` and dispatches each to a Handler. Owns all runtime configuration: hostname, TLS, timeouts, message size and recipient limits, connection caps, and graceful shutdown via `Shutdown`. A single Server instance handles many concurrent connections.
+The `Server` value. It accepts connections from a `net.Listener` and dispatches
+each one to a Handler. It owns configuration: hostname, TLS, timeouts, message
+size and recipient limits, connection cap, logger, postcat directory. One Server
+handles many concurrent connections. See clause group S.
 
 ### Handler
 
-The interface users implement to decide what happens at each SMTP transaction phase. Four callbacks — `Hello`, `MailFrom`, `RcptTo`, `Data` — are called serially per connection but concurrently across connections. One Handler instance is shared across all connections, so mutable state must be goroutine-safe.
+The interface a user implements to decide what happens at each transaction
+phase. Four callbacks: `Hello`, `MailFrom`, `RcptTo`, `Data`. Serial per
+connection, concurrent across connections. One Handler instance serves every
+connection, so mutable state must be safe. See clause group H.
 
-## SMTP Processing
+### Session
 
-### Transaction (Tx)
+One TCP connection, from the 220 banner to the close. A session may contain zero
+or more transactions. The code calls this a connection.
 
-The state accumulated across the phases of a single SMTP transaction: HELO domain, envelope sender, MAIL FROM parameters, all presented recipients, and the split between accepted and rejected recipients. Reset on RSET or after a successful DATA/BDAT completion. The server owns the Tx; handlers read it, they do not mutate it.
+### Transaction
+
+One mail delivery. It starts with MAIL, contains one or more RCPT commands, and
+ends with DATA, `BDAT ... LAST`, or RSET. The code and the documents use
+"transaction" for this, never "session".
+
+### Tx
+
+The per-transaction state passed to the handler: HELO domain, envelope sender,
+MAIL parameters, presented recipients, accepted and rejected subsets, remote
+address, and TLS state. The server owns it and replaces it after RSET and after
+a completed transaction. Handlers read it; they do not mutate it.
+
+### Response
+
+The SMTP reply a handler returns: a three-digit code and a message. The `Resp*`
+values are shared pointers. Do not mutate them; call `Copy()` when you need a
+different message.
+
+## SMTP processing
 
 ### Envelope
 
-The SMTP envelope — the MAIL FROM sender and RCPT TO recipients — as distinct from the RFC 5322 message headers carried inside DATA. The envelope determines routing and delivery; the headers are opaque payload. Postcat files record the envelope explicitly before the message body.
+The SMTP envelope: MAIL FROM and RCPT TO. It controls routing and delivery. The
+RFC 5322 headers inside DATA are payload and are not part of the envelope.
+Postcat files record the envelope before the message body.
 
-### Connection Takeover
+### Envelope sender
 
-When the worker goroutine takes direct control of the network connection from the reader goroutine during DATA and STARTTLS. The reader pauses (blocks on a resume channel) while the worker reads the dot-stuffed body or performs the TLS handshake directly on the raw connection. This prevents the reader and worker from racing for bytes on the same socket.
+The MAIL FROM address. An empty string means the null sender, written as `<>`
+in SMTP and in postcat files.
+
+### Connection takeover
+
+The worker taking direct control of the socket while the reader goroutine is
+paused on `resumeCh`. It happens for DATA, BDAT, and STARTTLS. The pause
+prevents two goroutines from racing for bytes on one socket. See clause C3.
+
+### Pipelining
+
+Sending several SMTP commands without waiting for each reply (RFC 2920). The
+reader queues commands in a buffered channel (depth 32) while the worker
+processes them in order. DATA, BDAT, and STARTTLS stop read-ahead.
+
+### Phase
+
+The transaction stage used for command sequencing: init, HELO received, MAIL
+received, RCPT received. `phase` is separate from `gotHelo`. RSET clears the
+phase but keeps the HELO state.
+
+### BDAT / CHUNKING
+
+RFC 3030 message transfer in counted chunks instead of dot-stuffed lines. A
+non-LAST chunk gets 250. The LAST chunk calls `Handler.Data` with the
+concatenated body. CHUNKING does not imply BINARYMIME; they are separate
+extensions.
+
+### STARTTLS
+
+RFC 3207 upgrade of a plaintext session to TLS. The server advertises it only
+when `TLSConfig` is set. Setting `TLSConfig` currently makes TLS mandatory for
+MAIL; see gap X5.
+
+### SMTPS
+
+Implicit TLS. The caller wraps the listener in `tls.Listener` and passes it to
+`Serve`. Supported, but `Tx.TLS` is not populated on this path; see gap X3.
 
 ## Persistence
 
 ### Postcat
 
-A flat-file format for persisting accepted messages to disk, compatible with Postfix's `postcat(1)` output. Each file contains envelope records (S for sender, R for each recipient, T for timestamp), a blank separator line, and the raw RFC 5322 message body. The `internal/postcat` package provides `Write`, `Parse`, and `FormatEnvelope`; CLI tools (`cmd/postcat`, `cmd/postcat-replay`, `cmd/verify-postcat`) provide inspection, replay, and batch verification.
+A flat-file format for persisting an accepted message. It borrows Postfix's
+record letters: `S` sender, `R` recipient, `T` timestamp. A blank line separates
+the envelope from the raw RFC 5322 message. It is Postfix-style, not the Postfix
+queue-file format, and it is not intended for Postfix tools. The `internal/postcat`
+package provides `Write`, `Parse`, and `FormatEnvelope`. CLI tools:
+`cmd/postcat`, `cmd/postcat-replay`, `cmd/verify-postcat`.
 
-## Flagged Ambiguities
+### Best-effort write
 
-- "Transaction" had been used interchangeably with "session" — the project settled on Transaction (Tx) as the canonical term. A session spans the TCP connection; a transaction spans one mail delivery (HELO through DATA/RSET).
+The server writes the postcat file after the handler returns 250. The client has
+already received 250, so a write failure is logged and the reply does not
+change. Do not confuse this with durability.
+
+## Project process
+
+These terms describe how this repository is maintained. They are not SMTP
+concepts.
+
+### Clause
+
+A numbered requirement in `docs/spec.md`, such as `P4` or `H1`. Clause IDs are
+stable and never renumbered. A commit that changes behaviour cites the clause.
+
+### Gap
+
+A known difference between a clause and the code, recorded in `docs/spec.md`
+§14 as an `X` entry. A gap is a bug with evidence, not a permanent exception.
+
+### Decision
+
+An entry in `docs/decisions.md`, such as `D5`. It records why a choice was made.
+Accepted entries are never rewritten; a later entry supersedes them.
+
+### Agent guide
+
+`AGENTS.md`. The single entry point for contributors and coding agents.
+`CLAUDE.md` is a pointer to it, not a second copy.
+
+## Flagged ambiguities
+
+- "Transaction" was once used for a whole connection. The project settled on
+  "session" for the connection and "transaction" for one delivery.
+- "Postfix-compatible" was used for the postcat format. It is not compatible.
+  Use "Postfix-style".
+- "TLS", "STARTTLS", and "SMTPS" are not synonyms. TLS is the protocol,
+  STARTTLS is the upgrade command, and SMTPS is implicit TLS on connect.
