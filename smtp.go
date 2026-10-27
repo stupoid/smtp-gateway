@@ -104,7 +104,10 @@ func (s *Server) handleConn(netConn net.Conn) {
 		return
 	}
 
-	tx := s.newTx(netConn)
+	// The banner write completes the lazy TLS handshake on an implicit
+	// TLS listener, so capture the state before the first Tx.
+	conn.captureTLS()
+	tx := s.newTx(conn)
 
 	var (
 		phase    = phaseInit
@@ -179,7 +182,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 					// still valid, but MAIL FROM / RCPT TO are cleared.
 					if resp != nil {
 						phase = phaseHelo
-						tx = s.newTx(netConn)
+						tx = s.newTx(conn)
 						conn.resetBodyBuf()
 					}
 				case "BDAT":
@@ -187,11 +190,11 @@ func (s *Server) handleConn(netConn net.Conn) {
 					if resp != nil && resp.Code == 250 && !inBdat {
 						// Transaction reset on LAST chunk (handleBdat clears inBdat).
 						phase = phaseInit
-						tx = s.newTx(netConn)
+						tx = s.newTx(conn)
 					}
 				case "RSET":
 					resp = &Response{250, "2.0.0 OK"}
-					tx = s.newTx(netConn)
+					tx = s.newTx(conn)
 					conn.resetBodyBuf()
 					phase = phaseInit
 					inBdat = false
@@ -486,9 +489,7 @@ func (s *Server) handleStartTLS(
 	}
 	_ = conn.netConn.SetDeadline(time.Time{})
 	conn.upgradeToTLS(tlsConn)
-
-	cs := tlsConn.ConnectionState()
-	tx.TLS = &cs
+	tx.TLS = conn.tlsState
 
 	return nil, true // no response line needed; client will re-EHLO
 }
@@ -855,12 +856,13 @@ func parseRcptTo(args string) string {
 
 // connState bundles a network connection with its buffered I/O.
 type connState struct {
-	netConn net.Conn
-	r       *bufio.Reader
-	w       *bufio.Writer
-	mu      sync.Mutex      // guards writes
-	bodyBuf []byte          // BDAT chunk accumulation
-	ctx     context.Context // per-connection — cancelled on close or shutdown
+	netConn  net.Conn
+	r        *bufio.Reader
+	w        *bufio.Writer
+	mu       sync.Mutex           // guards writes
+	bodyBuf  []byte               // BDAT chunk accumulation
+	ctx      context.Context      // per-connection — cancelled on close or shutdown
+	tlsState *tls.ConnectionState // nil until TLS is active
 }
 
 // resetBodyBuf clears the BDAT chunk accumulation buffer.
@@ -871,10 +873,28 @@ func (c *connState) resetBodyBuf() {
 	c.bodyBuf = nil
 }
 
-func (c *connState) upgradeToTLS(tlsConn net.Conn) {
+// upgradeToTLS switches the connection to TLS and records the negotiated
+// state.  Every Tx created after this call inherits the state.
+func (c *connState) upgradeToTLS(tlsConn *tls.Conn) {
+	cs := tlsConn.ConnectionState()
+	c.tlsState = &cs
 	c.netConn = tlsConn
 	c.r = bufio.NewReader(tlsConn)
 	c.w = bufio.NewWriter(tlsConn)
+}
+
+// captureTLS records the TLS state of an implicit TLS connection.  The
+// handshake runs lazily on the first I/O, so the caller must invoke this
+// after the banner write succeeded.
+func (c *connState) captureTLS() {
+	tlsConn, ok := c.netConn.(*tls.Conn)
+	if !ok {
+		return
+	}
+	cs := tlsConn.ConnectionState()
+	if cs.HandshakeComplete {
+		c.tlsState = &cs
+	}
 }
 
 func (c *connState) SetReadDeadline(t time.Time) {
@@ -998,10 +1018,12 @@ func (s *Server) writePostcat(mailFrom string, accepted []string, body []byte) {
 	}
 }
 
-// newTx creates a fresh transaction state for a new connection.
-func (s *Server) newTx(conn net.Conn) *Tx {
+// newTx creates a fresh transaction state for a connection.  The TLS
+// state comes from the connection, so it survives RSET and DATA.
+func (s *Server) newTx(conn *connState) *Tx {
 	return &Tx{
-		RemoteAddr: conn.RemoteAddr(),
+		RemoteAddr: conn.netConn.RemoteAddr(),
+		TLS:        conn.tlsState,
 		Hostname:   s.Hostname,
 		Params:     map[string]string{},
 	}

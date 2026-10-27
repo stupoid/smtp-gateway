@@ -151,7 +151,7 @@ Reader                              Worker
   |                                    +-- write 220
   |                                    +-- tls.Server(conn.netConn).Handshake
   |                                    +-- replace conn.r and conn.w
-  |                                    +-- tx.TLS = state
+  |                                    +-- conn.tlsState = state
   |                                    +-- gotHelo = false, phase = init
   <-- resumeCh ------------------------+
   |                                    |
@@ -163,6 +163,10 @@ listener is not replaced; only the buffered reader and writer wrap the TLS
 connection. Bytes the client pipelined after STARTTLS are discarded with the
 old plaintext reader, which is correct: RFC 3207 forbids pipelining the
 handshake.
+
+TLS state lives on `connState`, not on `Tx`. Every new `Tx` copies it, so
+`Tx.TLS` survives RSET and DATA. For implicit TLS the state is captured after
+the banner write, because `tls.Conn` performs the handshake lazily.
 
 ## Transaction state machine
 

@@ -274,8 +274,8 @@ Write for a reader who is tired and in a hurry.
 - **TLS is not optional when `TLSConfig` is set.** `MAIL` returns 530 until the
   client upgrades. This is stricter than RFC 3207 §3.1 requires for a public
   MX. Gap X5.
-- **Implicit TLS does not populate `Tx.TLS`.** A handler on an SMTPS listener
-  cannot see the TLS state. Gap X3.
+- **Implicit TLS is captured after the banner write.** The handshake is lazy,
+  so `Tx.TLS` is set once the banner is sent (C7).
 - **A handler panic drops the connection.** The server logs `handler_panic` and
   closes. It does not send 451. Do not use panics for control flow.
 - **Postcat is best effort.** The client gets 250 before the file is written.

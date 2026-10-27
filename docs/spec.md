@@ -71,7 +71,7 @@ reading the code and by the concurrency tests.
 | C4 | The watchdog MUST close the socket no earlier than 50 ms after the connection context is cancelled. The delay lets the worker send 421 first. | ok |
 | C5 | On shutdown, the worker SHOULD send `421 4.3.0 Service shutting down` before it returns, when the socket is still writable. | ok |
 | C6 | A panic in a handler or in the reader MUST NOT crash the process. The server MUST log it and close the connection. | ok* |
-| C7 | `Tx.TLS` MUST describe the TLS session whenever the connection is protected by TLS, including implicit TLS through a `tls.Listener`. | gap (X3) |
+| C7 | `Tx.TLS` MUST describe the TLS session whenever the connection is protected by TLS, including implicit TLS through a `tls.Listener`. The state MUST survive RSET and DATA. | ok |
 | C8 | Response writes MUST be serialised and flushed before the next command is processed. | ok |
 
 ## 5. Transaction state (T)
@@ -211,7 +211,6 @@ date and an owner, not a licence to keep the behaviour.
 |---|---|---|---|---|---|
 | X1 | High | P2 | A second HELO or EHLO returns 503. RFC 5321 §4.1.4 requires acceptance and a transaction reset. Clients that re-EHLO after RSET fail. | `smtp.go:384-409`; `TestSMTPHeloTwiceRejected`, `TestSMTPEhloAfterHelo` assert the gap | Accept the command when the argument is valid, run `newTx`, clear BDAT state, call `Hello` again. Update both tests. |
 | X2 | High | E2 | EHLO after a successful STARTTLS still lists STARTTLS. A second STARTTLS then returns 503. RFC 3207 §4.2 forbids the advertisement. | `smtp.go:432-434`; no test | Add `&& !tlsReady` to the advertisement. Add a test that asserts the post-TLS EHLO list has no STARTTLS. |
-| X3 | Medium | C7 | `Tx.TLS` is nil for implicit TLS through a `tls.Listener`. Handlers cannot see the peer certificate on SMTPS. | `smtp.go:490-491`; README claims SMTPS support | Capture the TLS state from the listener connection at session start, or expose a per-connection accessor. Add an SMTPS test. |
 | X4 | High | P17 | `readLine` calls `bufio.Reader.ReadString` and checks the length afterwards, so a long line is buffered in full. An over-long line closes the socket with no reply. | `smtp.go:926-940`; probe: a 1 MiB line produced no response | Read with a bounded buffer, or use `ReadSlice` and count. Return 500 and close after the limit. Add a test at 512 bytes and at 64 KiB. |
 | X5 | High | E5 | When `TLSConfig` is set, MAIL returns 530 until the client upgrades. A public MX then refuses all plaintext mail. | `smtp.go:500-502`; RFC 3207 §3.1 | Add `RequireTLS bool` (default false). Keep 530 only when it is true. Document the change in an ADR. |
 | X6 | Medium | T11 | A non-250 handler response to `BDAT ... LAST` leaves the transaction open. A later BDAT can call `Data` again without MAIL or RCPT. DATA does reset. | `smtp.go:185-191`, `smtp.go:781-791` | Reset phase and `Tx` on any completed LAST, matching DATA. Add a test. |

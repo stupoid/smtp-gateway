@@ -39,7 +39,7 @@ The server sends `220 <hostname> ESMTP` and creates a `Tx`:
 |---|---|
 | `tx.RemoteAddr` | client's remote address |
 | `tx.Hostname` | server's advertised hostname |
-| `tx.TLS` | nil, until STARTTLS. Nil for implicit TLS too (gap X3) |
+| `tx.TLS` | nil until TLS is active. Set for STARTTLS and implicit TLS (C7) |
 | `tx.Helo` | empty |
 | `tx.MailFrom` | empty |
 | `tx.Params` | empty map, not nil |
@@ -135,8 +135,8 @@ successful handshake the server discards the HELO state; the client must send
 EHLO again. `tx.TLS` is populated with the connection state.
 
 The server currently advertises STARTTLS again after the handshake (gap X2) and
-requires TLS for MAIL (gap X5). Implicit TLS through a `tls.Listener` does not
-populate `tx.TLS` (gap X3).
+requires TLS for MAIL (gap X5). Implicit TLS through a `tls.Listener` also
+populates `tx.TLS` (C7).
 
 ## Handler contract invariants
 

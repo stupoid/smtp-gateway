@@ -102,9 +102,6 @@ are serial, so per-connection state needs no lock.
   returns `530 5.7.0 STARTTLS required first` until the client upgrades. There
   is no opportunistic-TLS mode yet (gap X5). This is stricter than RFC 3207
   §3.1 requires for a public MX.
-- **SMTPS does not set `Tx.TLS`.** A `tls.Listener` works, but `Tx.TLS` is only
-  populated by STARTTLS, so a handler on port 465 cannot inspect the peer
-  certificate (gap X3).
 - **Don't mutate `tx`.** The server owns it; read only.
 - **Copy the body if you keep it.** The server does not promise the slice's
   lifetime after the callback returns.
@@ -159,7 +156,7 @@ ln, _ := net.Listen("tcp", ":465")
 srv.Serve(tls.NewListener(ln, tlsConfig))
 ```
 
-The SMTPS path works, but `Tx.TLS` stays nil (gap X3).
+The SMTPS path works and `Tx.TLS` is populated.
 
 ## Protocol support
 
@@ -168,7 +165,7 @@ The SMTPS path works, but `Tx.TLS` stays nil (gap X3).
 | EHLO / HELO | Yes |
 | PIPELINING (RFC 2920) | Yes |
 | STARTTLS (RFC 3207) | Yes, required when configured (X5) |
-| SMTPS (implicit TLS) | Yes via `tls.Listener`; `Tx.TLS` not populated (X3) |
+| SMTPS (implicit TLS) | Yes via `tls.Listener`; `Tx.TLS` is populated |
 | 8BITMIME | Advertised; enforced for DATA only |
 | ENHANCEDSTATUSCODES | Advertised; the 354 reply has no 2.x.x code |
 | SMTPUTF8 | Advertised; 8-bit bodies accepted with `SMTPUTF8` |

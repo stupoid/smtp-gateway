@@ -1955,3 +1955,154 @@ func TestSMTPMaxConnectionsEnforced(t *testing.T) {
 	_ = l.Close()
 	_ = srv.Shutdown(context.Background())
 }
+
+// ---------------------------------------------------------------------------
+// TLS state on the transaction
+// ---------------------------------------------------------------------------
+
+// tlsStateRecorder records whether Tx.TLS was non-nil on each MailFrom
+// call.  It is safe for concurrent use.
+type tlsStateRecorder struct {
+	mu     sync.Mutex
+	states []bool
+}
+
+func (h *tlsStateRecorder) Hello(_ context.Context, _ *Tx) *Response  { return RespHelloOK }
+func (h *tlsStateRecorder) RcptTo(_ context.Context, _ *Tx) *Response { return RespRcptOK }
+func (h *tlsStateRecorder) Data(_ context.Context, _ *Tx, _ []byte) *Response {
+	return RespDataOK
+}
+
+func (h *tlsStateRecorder) MailFrom(_ context.Context, tx *Tx) *Response {
+	h.mu.Lock()
+	h.states = append(h.states, tx.TLS != nil)
+	h.mu.Unlock()
+	return RespMailOK
+}
+
+func (h *tlsStateRecorder) snapshot() []bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]bool(nil), h.states...)
+}
+
+// TestSMTPSPopulatesTxTLS verifies that implicit TLS (tls.Listener)
+// exposes the TLS state on Tx.  Before this test the state was only set
+// by STARTTLS, so an SMTPS handler could not inspect the peer certificate.
+func TestSMTPSPopulatesTxTLS(t *testing.T) {
+	cert := testCert(t)
+	rec := &tlsStateRecorder{}
+
+	srv := &Server{Hostname: "test.local", Handler: rec}
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(tls.NewListener(l, &tls.Config{Certificates: []tls.Certificate{cert}})) }()
+
+	conn, err := tls.Dial("tcp", l.Addr().String(), &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         "test.local",
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	scanner := bufio.NewScanner(conn)
+	if !scanner.Scan() {
+		t.Fatalf("no banner: %v", scanner.Err())
+	}
+
+	sendAndExpect(t, conn, scanner, "EHLO client\r\n", "250")
+	_ = readMultiline(t, scanner)
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "DATA\r\n", "354")
+	write(t, conn, "body\r\n.\r\n")
+	expectResp(t, scanner, "250")
+
+	states := rec.snapshot()
+	if len(states) != 1 {
+		t.Fatalf("MailFrom calls = %d, want 1", len(states))
+	}
+	if !states[0] {
+		t.Error("Tx.TLS is nil on an implicit TLS connection")
+	}
+	write(t, conn, "QUIT\r\n")
+	_ = readResp(t, scanner)
+}
+
+// TestTxTLSSurvivesReset verifies that Tx.TLS survives the Tx replacement
+// after DATA and RSET.  Before this test the state lived only on Tx, so
+// the second transaction saw nil and a handler could mistake a TLS
+// session for plaintext.
+func TestTxTLSSurvivesReset(t *testing.T) {
+	cert := testCert(t)
+	rec := &tlsStateRecorder{}
+
+	srv := &Server{
+		Hostname:  "test.local",
+		Handler:   rec,
+		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
+	}
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+
+	conn, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	scanner := bufio.NewScanner(conn)
+	if !scanner.Scan() {
+		t.Fatalf("no banner: %v", scanner.Err())
+	}
+
+	sendAndExpect(t, conn, scanner, "EHLO client\r\n", "250")
+	_ = readMultiline(t, scanner)
+	sendAndExpect(t, conn, scanner, "STARTTLS\r\n", "220")
+
+	tlsConn := tls.Client(conn, &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         "test.local",
+	})
+	if err := tlsConn.Handshake(); err != nil {
+		t.Fatalf("TLS handshake: %v", err)
+	}
+	scanner = bufio.NewScanner(tlsConn)
+
+	sendAndExpect(t, tlsConn, scanner, "EHLO client\r\n", "250")
+	_ = readMultiline(t, scanner)
+
+	// First transaction, then a second one after DATA replaced the Tx.
+	for i := 0; i < 2; i++ {
+		sendAndExpect(t, tlsConn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+		sendAndExpect(t, tlsConn, scanner, "RCPT TO:<r@t>\r\n", "250")
+		sendAndExpect(t, tlsConn, scanner, "DATA\r\n", "354")
+		write(t, tlsConn, "body\r\n.\r\n")
+		expectResp(t, scanner, "250")
+	}
+
+	// Third transaction after an explicit RSET.
+	sendAndExpect(t, tlsConn, scanner, "RSET\r\n", "250")
+	sendAndExpect(t, tlsConn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+
+	states := rec.snapshot()
+	if len(states) != 3 {
+		t.Fatalf("MailFrom calls = %d, want 3", len(states))
+	}
+	for i, ok := range states {
+		if !ok {
+			t.Errorf("transaction %d: Tx.TLS is nil after a reset", i+1)
+		}
+	}
+
+	sendAndExpect(t, tlsConn, scanner, "QUIT\r\n", "221")
+}

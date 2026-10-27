@@ -91,7 +91,8 @@ MAIL; see gap X5.
 ### SMTPS
 
 Implicit TLS. The caller wraps the listener in `tls.Listener` and passes it to
-`Serve`. Supported, but `Tx.TLS` is not populated on this path; see gap X3.
+`Serve`. `Tx.TLS` is populated after the banner write completes the lazy
+handshake.
 
 ## Persistence
 
