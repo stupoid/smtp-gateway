@@ -36,6 +36,7 @@ Each clause has a status.
 | `contract` | A rule for callers. The server does not enforce it at run time |
 | `partial` | Implemented for a subset of the stated cases |
 | `withdrawn` | No longer in force. Say what replaced it |
+| `known limit` | A documented limit that is not a defect |
 
 A change to a clause follows the protocol in §16.
 
@@ -208,7 +209,8 @@ These are out of scope, not missing features.
 ## 14. Conformance gaps
 
 A gap is a known difference between a clause and the code. It is a bug with a
-date and an owner, not a licence to keep the behaviour.
+date and an owner, not a licence to keep the behaviour. Gap IDs are stable: a
+fixed gap is removed and the numbers do not close up.
 
 | ID | Severity | Clause | Current behaviour | Evidence | Fix |
 |---|---|---|---|---|---|
