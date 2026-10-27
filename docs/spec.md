@@ -89,7 +89,7 @@ reading the code and by the concurrency tests.
 | T8 | Callbacks for one connection MUST be serial. Callbacks for different connections MAY run concurrently on the same Handler. | ok |
 | T9 | Handlers MUST treat `Tx` as read-only. The server does not defend against mutation. | contract |
 | T10 | A successful STARTTLS MUST discard the HELO/EHLO state. The client MUST send a new EHLO before MAIL. | ok |
-| T11 | A rejected `BDAT ... LAST` MUST close the transaction the same way a rejected DATA does. | gap (X6) |
+| T11 | A failed BDAT MUST close the transaction. This includes a rejected LAST and a failed non-LAST chunk. A rejected LAST MUST behave like a rejected DATA. | ok |
 
 ## 6. Commands (P)
 
@@ -104,7 +104,7 @@ reading the code and by the concurrency tests.
 | P7 | DATA before RCPT MUST return 503. DATA with no accepted recipient MUST return 554. Otherwise the server MUST send 354, read the dot-stuffed body, and call `Handler.Data`. | ok |
 | P8 | DATA MUST end the transaction on every return path, including rejection. | ok |
 | P9 | BDAT MUST parse `<size> [LAST]`, read exactly `size` bytes, return 250 for each chunk, and call `Handler.Data` only on LAST. | ok |
-| P10 | During a BDAT sequence, only BDAT, RSET, NOOP, and QUIT MAY be accepted. Any other command MUST return 503 and MUST discard the partial body. DATA after BDAT in one transaction MUST return 503. | ok |
+| P10 | During a BDAT sequence, only BDAT, RSET, NOOP, and QUIT MAY be accepted. Any other command MUST return 503, discard the partial body, and close the transaction. DATA after BDAT in one transaction MUST return 503. | ok |
 | P11 | RSET MUST return 250 and clear the transaction. | ok |
 | P12 | NOOP MUST return 250 and change nothing. | ok |
 | P13 | VRFY and EXPN MUST return 252. | ok |
@@ -210,7 +210,6 @@ date and an owner, not a licence to keep the behaviour.
 
 | ID | Severity | Clause | Current behaviour | Evidence | Fix |
 |---|---|---|---|---|---|
-| X6 | Medium | T11 | A non-250 handler response to `BDAT ... LAST` leaves the transaction open. A later BDAT can call `Data` again without MAIL or RCPT. DATA does reset. | `smtp.go:185-191`, `smtp.go:781-791` | Reset phase and `Tx` on any completed LAST, matching DATA. Add a test. |
 | X7 | Medium | F6 | `Parse` looks for `\n\n` before `\r\n\r\n`. A CRLF file whose body contains an LF blank line is truncated at the wrong offset. | `postcat.go:162-170`; reproduced: body `line1\n\nline2` parsed as `line2` | Find the earliest separator of either form, and require it to follow the last record line. Add LF and CRLF tests. |
 | X8 | Low | F5 | `Write` does not close the temp file on early write errors. The descriptor leaks until GC. | `postcat.go:75-95` | Close on every error path, or use a single deferred close. |
 | X9 | Low | F5 | The file is fsynced but the directory is not. The rename survives a process crash but not a power loss. | `postcat.go:101-112` | Sync the directory before returning, or state the weaker guarantee in `docs/postcat.md`. |

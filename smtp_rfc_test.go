@@ -1544,8 +1544,12 @@ func TestSMTPBDATBadSyntaxClearsBuffer(t *testing.T) {
 
 	// Accumulate a chunk, then send malformed BDAT, then a valid LAST.
 	// The handler must receive only the data from the LAST chunk.
+	// RFC 3030 makes the state indeterminate after a failed BDAT, so the
+	// server closes the transaction and the client must start a new one.
 	sendBdat(t, conn, scanner, 5, false, "Stale")
 	sendAndExpect(t, conn, scanner, "BDAT BADARGS\r\n", "501")
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
 	sendBdat(t, conn, scanner, 4, true, "Real")
 
 	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
@@ -2448,5 +2452,107 @@ func TestSMTPDataLineTooLong(t *testing.T) {
 
 	// The body was drained and the transaction was reset.
 	sendAndExpect(t, conn, scanner, "MAIL FROM:<s2@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
+// rejectDataHandler counts Data calls and rejects the message.
+type rejectDataHandler struct {
+	acceptAllHandler
+	mu    sync.Mutex
+	calls int
+}
+
+func (h *rejectDataHandler) Data(_ context.Context, _ *Tx, _ []byte) *Response {
+	h.mu.Lock()
+	h.calls++
+	h.mu.Unlock()
+	return &Response{550, "5.7.1 Rejected"}
+}
+
+func (h *rejectDataHandler) count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.calls
+}
+
+// TestSMTPBDATRejectedLastResets verifies that a rejected BDAT LAST closes
+// the transaction.  Before this fix the old envelope stayed open, so a
+// second BDAT could call Data again without MAIL or RCPT.
+func TestSMTPBDATRejectedLastResets(t *testing.T) {
+	h := &rejectDataHandler{}
+	srv := &Server{Hostname: "test.local", Handler: h, ReadTimeout: 5 * time.Second}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+
+	conn, scanner := dialAndReadBanner(t, l.Addr().String())
+	defer func() { _ = conn.Close() }()
+
+	sendAndExpect(t, conn, scanner, "EHLO client\r\n", "250")
+	_ = readMultiline(t, scanner)
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
+
+	write(t, conn, "BDAT 5 LAST\r\nhello")
+	expectResp(t, scanner, "550")
+
+	// The transaction is closed: BDAT no longer has a recipient phase.
+	write(t, conn, "BDAT 5 LAST\r\nagain")
+	expectResp(t, scanner, "503")
+	if h.count() != 1 {
+		t.Fatalf("Data calls = %d, want 1", h.count())
+	}
+
+	// A new transaction is allowed.
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
+// TestSMTPBDATBadCommandDiscardsPartial tests that a disallowed command
+// during a BDAT sequence abandons the partial message.  Without this,
+// a later LAST chunk could deliver a body missing the first chunk.
+func TestSMTPBDATBadCommandDiscardsPartial(t *testing.T) {
+	h := &recordingHandler{}
+	srv := &Server{Hostname: "test.local", Handler: h, ReadTimeout: 5 * time.Second}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+
+	conn, scanner := dialAndReadBanner(t, l.Addr().String())
+	defer func() { _ = conn.Close() }()
+
+	sendAndExpect(t, conn, scanner, "EHLO client\r\n", "250")
+	_ = readMultiline(t, scanner)
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
+
+	write(t, conn, "BDAT 5\r\nhello")
+	expectResp(t, scanner, "250")
+
+	// MAIL is illegal during a BDAT sequence.  It abandons the message.
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "503")
+
+	// A LAST chunk is out of sequence now, so Data must not run.
+	write(t, conn, "BDAT 5 LAST\r\nworld")
+	expectResp(t, scanner, "503")
+
+	// Start again.  The delivered body must not contain "hello".
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
+	write(t, conn, "BDAT 5 LAST\r\nworld")
+	expectResp(t, scanner, "250")
+
+	h.mu.Lock()
+	body := string(h.lastBody)
+	h.mu.Unlock()
+	if body != "world" {
+		t.Fatalf("Data body = %q, want %q", body, "world")
+	}
 	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
 }

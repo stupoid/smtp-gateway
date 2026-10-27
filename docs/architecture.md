@@ -140,8 +140,10 @@ Reader                              Worker
 force a proportional allocation. A single chunk is capped at 64 MiB.
 
 While a BDAT sequence is open, the worker rejects every verb except BDAT, RSET,
-NOOP, and QUIT. RSET and a bad-sequence rejection both call `resetBodyBuf`, so
-orphaned chunk data cannot leak into the next transaction.
+NOOP, and QUIT. A bad-sequence rejection and any failed BDAT close the
+transaction and call `resetBodyBuf`. Orphaned chunk data cannot leak, and a
+partial body cannot be delivered. A LAST chunk closes the transaction whether
+the handler accepts or rejects the message.
 
 ### STARTTLS
 

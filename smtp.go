@@ -142,15 +142,21 @@ func (s *Server) handleConn(netConn net.Conn) {
 				if inBdat {
 					inBdat = false
 					conn.resetBodyBuf()
+					tx = s.resetTx(conn, tx)
+					phase = phaseHelo
 				}
 				resp = &Response{500, "5.5.2 Line too long"}
 			case inBdat && !isAllowedDuringBdat(cmd.verb):
 				if cmd.verb == "DATA" || cmd.verb == "STARTTLS" {
 					resumeCh <- struct{}{}
 				}
-				// Abandon the BDAT sequence — orphaned chunk data
-				// must not leak into the next BDAT transaction.
+				// Abandon the BDAT sequence and the partial message.
+				// Orphaned chunk data must not leak into the next
+				// transaction, and a partial body must not be delivered.
 				conn.resetBodyBuf()
+				inBdat = false
+				tx = s.resetTx(conn, tx)
+				phase = phaseHelo
 				resp = &Response{503, "5.5.1 Bad sequence of commands"}
 			default:
 				switch cmd.verb {
@@ -200,11 +206,15 @@ func (s *Server) handleConn(netConn net.Conn) {
 						conn.resetBodyBuf()
 					}
 				case "BDAT":
-					resp = s.handleBdat(conn, cmd, tx, phase, &inBdat, resumeCh)
-					if resp != nil && resp.Code == 250 && !inBdat {
-						// Transaction reset on LAST chunk (handleBdat clears inBdat).
-						phase = phaseInit
+					var ended bool
+					resp, ended = s.handleBdat(conn, cmd, tx, phase, &inBdat, resumeCh)
+					if ended || resp.Code != 250 {
+						// A LAST chunk ends the transaction, and a failed
+						// chunk leaves the state indeterminate (RFC 3030).
+						// Close it so a partial body cannot be delivered.
+						phase = phaseHelo
 						tx = s.resetTx(conn, tx)
+						conn.resetBodyBuf()
 					}
 				case "RSET":
 					resp = &Response{250, "2.0.0 OK"}
@@ -713,10 +723,13 @@ func readNBytes(r *bufio.Reader, n int, conn *connState, readTimeout time.Durati
 	return buf, nil
 }
 
+// handleBdat processes one BDAT command.  The second return value reports
+// that the chunk was LAST, so the caller can close the transaction even when
+// the handler rejects the message.
 func (s *Server) handleBdat(
 	conn *connState, cmd smtpCmd, tx *Tx,
 	phase int, inBdat *bool, resumeCh chan<- struct{},
-) *Response {
+) (*Response, bool) {
 	// Signal resumeCh on every return — the reader goroutine is paused
 	// waiting for BDAT processing to finish.
 	//
@@ -757,22 +770,22 @@ func (s *Server) handleBdat(
 	size, last, err = parseBdatArgs(cmd.args)
 	if err != nil {
 		discardChunk()
-		return &Response{501, "5.5.4 Bad BDAT syntax"}
+		return &Response{501, "5.5.4 Bad BDAT syntax"}, false
 	}
 
 	if phase < phaseRcpt {
 		discardChunk()
-		return &Response{503, "5.5.1 RCPT required first"}
+		return &Response{503, "5.5.1 RCPT required first"}, last
 	}
 	if len(tx.Accepted) == 0 {
 		discardChunk()
-		return &Response{554, "5.5.1 No valid recipients"}
+		return &Response{554, "5.5.1 No valid recipients"}, last
 	}
 
 	// MaxMessageSize check before reading.
 	if s.MaxMessageSize > 0 && len(conn.bodyBuf)+size > s.MaxMessageSize {
 		discardChunk()
-		return RespMessageSize
+		return RespMessageSize, last
 	}
 
 	// Read the chunk data.
@@ -781,7 +794,7 @@ func (s *Server) handleBdat(
 		s.logError("bdat_read_error", slog.String("error", err.Error()))
 		*inBdat = false
 		conn.resetBodyBuf()
-		return &Response{451, "4.3.0 Error reading chunk"}
+		return &Response{451, "4.3.0 Error reading chunk"}, false
 	}
 
 	conn.bodyBuf = append(conn.bodyBuf, chunk...)
@@ -789,11 +802,11 @@ func (s *Server) handleBdat(
 	if !last {
 		// Intermediate chunk — stay in BDAT mode.
 		*inBdat = true
-		return &Response{250, "2.0.0 OK"}
+		return &Response{250, "2.0.0 OK"}, false
 	}
 
-	// LAST chunk — message complete.  RFC 3030 Section 3: CHUNKING implies
-	// BINARYMIME, so no 8BITMIME check needed (unlike DATA).
+	// LAST chunk — message complete.  BDAT is a counted transfer, so no
+	// dot-unstuffing and no 8BITMIME check apply (unlike DATA).
 	*inBdat = false
 
 	s.logInfo("bdat_received",
@@ -812,7 +825,7 @@ func (s *Server) handleBdat(
 	}
 
 	conn.resetBodyBuf()
-	return resp
+	return resp, true
 }
 
 // --- Address parsing ---

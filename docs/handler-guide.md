@@ -106,7 +106,8 @@ For DATA, the server reads the dot-stuffed body, removes the stuffing, and
 passes the raw RFC 5322 bytes to `Handler.Data(ctx, tx, body)`.
 
 For BDAT, each non-LAST chunk accumulates in a buffer. Only the LAST chunk calls
-`Data`, with the concatenated body.
+`Data`, with the concatenated body. A failed BDAT closes the transaction; start
+again with MAIL (RFC 3030).
 
 | Field | Value |
 |---|---|
