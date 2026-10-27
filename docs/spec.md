@@ -192,6 +192,7 @@ reading the code and by the concurrency tests.
 | Q6 | Releases SHOULD be tagged with semantic versions so `go get` resolves a stable version. No tag exists today. | gap (X14) |
 | Q7 | Commits MUST be atomic and follow `AGENTS.md`. Documents MUST change in the commit that makes them true. | contract |
 | Q8 | Every `cmd` package SHOULD have at least one test of its argument handling or helpers. | gap (X13) |
+| Q9 | `go test` MUST fail when a clause ID, status, gap reference, or relative link is inconsistent. | ok |
 
 ## 13. Non-goals
 
@@ -227,11 +228,13 @@ a defect with a narrow trigger or a documentation defect.
 | `smtp_bench_test.go` | Benchmarks only |
 | `gateway_test.go` | `NewServer`, options, `SlogLogger` |
 | `fuzz_test.go` | Fuzz seeds for the parsers and the body reader |
+| `docs_integrity_test.go` | Clause IDs, status values, gap references, and relative links |
+| `cmd/postcat-replay/main_test.go` | Replay helpers: reply reader, dot-stuffing, sender formatting |
 | `example_test.go` | Package example |
 | `internal/postcat/postcat_test.go` | `Write`, `Parse`, null sender, empty body |
 | `e2e/run-e2e*.sh` | Real clients: swaks, mutt, msmtp, curl; TLS, BDAT, pipelining, concurrency |
 
-Coverage on 2026-10-27: 67.0% of statements in the root module. Recompute with:
+Coverage on 2026-10-27: 74.0% of statements across all packages. Recompute with:
 
 ```bash
 go test -count=1 -coverprofile=coverage.out ./...

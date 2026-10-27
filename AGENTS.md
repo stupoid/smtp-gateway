@@ -82,6 +82,8 @@ export GOCACHE="$PWD/.gocache" GOPATH="$PWD/.gopath"
 ```
 
 `make check` must pass before you commit. A green `go test` alone is not enough.
+The test suite includes a docs-integrity check: a broken clause ID, status, gap
+reference, or relative link fails the gate.
 
 ## Repository map
 
@@ -198,6 +200,7 @@ Add a round-trip test and a parse test for old files.
 - [ ] A spec clause exists for the new or changed behaviour.
 - [ ] A test fails without the change and passes with it.
 - [ ] Every document that describes the old behaviour is updated.
+- [ ] The docs-integrity test passes (included in `make check`).
 - [ ] No new lint suppression or `//nolint` without a reason on the same line.
 - [ ] No new public API without a decision entry.
 - [ ] The commit message says why, and cites clause and decision IDs.

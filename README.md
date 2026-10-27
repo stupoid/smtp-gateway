@@ -285,7 +285,8 @@ transaction state resets.
 ## Contributing
 
 Read `AGENTS.md`. Run `make check` before you commit. A behaviour change needs a
-spec clause, a test, and the documents in the same commit.
+spec clause, a test, and the documents in the same commit. The gate also checks
+relative document links, clause IDs, and gap references.
 
 ## License
 
