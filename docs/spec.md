@@ -188,7 +188,7 @@ reading the code and by the concurrency tests.
 | Q2 | CI MUST run a gofmt check, lint, race tests, and the eight e2e suites on Linux. | ok |
 | Q3 | A test MUST NOT protect a known gap without an `X` reference in a comment. | contract |
 | Q4 | Parsers SHOULD have fuzz targets: `parseMailFrom`, `parseRcptTo`, `parseBdatArgs`, and `readDotUnstuffed`. | gap (X13) |
-| Q5 | The module MUST build and pass tests on the Go version in `go.mod` (1.21). CI currently tests only 1.26. | gap (X12) |
+| Q5 | The module MUST build and pass tests on the Go version in `go.mod` (1.21). CI MUST test that version. | ok |
 | Q6 | Releases SHOULD be tagged with semantic versions so `go get` resolves a stable version. No tag exists today. | gap (X14) |
 | Q7 | Commits MUST be atomic and follow `AGENTS.md`. Documents MUST change in the commit that makes them true. | contract |
 
@@ -210,7 +210,6 @@ date and an owner, not a licence to keep the behaviour.
 
 | ID | Severity | Clause | Current behaviour | Evidence | Fix |
 |---|---|---|---|---|---|
-| X12 | Medium | Q5 | `go.mod` declares Go 1.21. CI tests only 1.26, so a dependency or syntax that raises the floor is not caught. | `go.mod:3`, `.github/workflows/ci.yml` | Add a CI job with `go-version-file: go.mod`. |
 | X13 | Medium | Q4 | No fuzz targets exist. All four CLI packages have 0% coverage. | `grep -r "func Fuzz" .` returns nothing; `go tool cover` | Add fuzz tests for the parsers and body reader. Add one test per CLI. |
 | X14 | Low | Q6 | The repository has no tags. `go get` resolves a pseudo-version. | `git tag` is empty | Tag `v0.1.0` when the API is ready. |
 

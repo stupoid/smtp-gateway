@@ -69,8 +69,8 @@ go test -count=1 -run TestSMTPStartTLS ./...
 
 Requirements:
 
-- Go 1.26 for CI. The module declares Go 1.21. CI does not prove 1.21 yet
-  (gap X12).
+- Go 1.26 for the race suite. The module declares Go 1.21, and a CI job tests
+  that declared floor.
 - `golangci-lint` v2.12 or later. The config is schema v2.
 - End-to-end tests need `swaks`, `mutt`, `msmtp`, `curl`, and `nc`.
 
