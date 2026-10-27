@@ -2213,3 +2213,122 @@ func TestTxTLSSurvivesReset(t *testing.T) {
 
 	sendAndExpect(t, tlsConn, scanner, "QUIT\r\n", "221")
 }
+
+// TestSMTPPlaintextMailWhenTLSOptional verifies the default policy:
+// TLSConfig advertises STARTTLS, but plaintext mail is accepted.
+// RFC 3207 §3.1 forbids a public MX from requiring TLS.
+func TestSMTPPlaintextMailWhenTLSOptional(t *testing.T) {
+	cert := testCert(t)
+	srv := &Server{
+		Hostname: "test.local",
+		Handler:  &acceptAllHandler{},
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		},
+	}
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+
+	conn, scanner := dialAndReadBanner(t, l.Addr().String())
+	defer func() { _ = conn.Close() }()
+
+	write(t, conn, "EHLO client\r\n")
+	lines := readMultiline(t, scanner)
+	found := false
+	for _, line := range lines {
+		if strings.Contains(line, "STARTTLS") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("STARTTLS is not advertised when TLSConfig is set")
+	}
+
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "DATA\r\n", "354")
+	write(t, conn, "body\r\n.\r\n")
+	expectResp(t, scanner, "250")
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
+// TestSMTPRequireTLSRejectsPlaintext verifies the opt-in policy.  MAIL
+// is rejected until the client upgrades, and accepted after STARTTLS.
+func TestSMTPRequireTLSRejectsPlaintext(t *testing.T) {
+	cert := testCert(t)
+	srv := &Server{
+		Hostname: "test.local",
+		Handler:  &acceptAllHandler{},
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		},
+		RequireTLS: true,
+	}
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+
+	conn, scanner := dialAndReadBanner(t, l.Addr().String())
+	defer func() { _ = conn.Close() }()
+
+	write(t, conn, "EHLO client\r\n")
+	_ = readMultiline(t, scanner)
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "530")
+
+	sendAndExpect(t, conn, scanner, "STARTTLS\r\n", "220")
+	tlsConn := tls.Client(conn, &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         "test.local",
+	})
+	if err := tlsConn.Handshake(); err != nil {
+		t.Fatalf("TLS handshake: %v", err)
+	}
+	scanner = bufio.NewScanner(tlsConn)
+	write(t, tlsConn, "EHLO client\r\n")
+	_ = readMultiline(t, scanner)
+	sendAndExpect(t, tlsConn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, tlsConn, scanner, "QUIT\r\n", "221")
+}
+
+// dialAndReadBanner dials addr and consumes the 220 banner.
+func dialAndReadBanner(t *testing.T, addr string) (net.Conn, *bufio.Scanner) {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	scanner := bufio.NewScanner(conn)
+	if !scanner.Scan() {
+		_ = conn.Close()
+		t.Fatalf("no banner: %v", scanner.Err())
+	}
+	if !strings.HasPrefix(scanner.Text(), "220 ") {
+		_ = conn.Close()
+		t.Fatalf("bad banner: %s", scanner.Text())
+	}
+	return conn, scanner
+}
+
+// TestServeRejectsRequireTLSWithoutConfig verifies the configuration
+// guard.  Without TLSConfig the client has no way to satisfy RequireTLS.
+func TestServeRejectsRequireTLSWithoutConfig(t *testing.T) {
+	srv := &Server{Handler: &acceptAllHandler{}, RequireTLS: true}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	if err := srv.Serve(l); err == nil {
+		t.Fatal("Serve accepted RequireTLS without TLSConfig")
+	}
+}

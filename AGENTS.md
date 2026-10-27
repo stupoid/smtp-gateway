@@ -272,9 +272,8 @@ Write for a reader who is tired and in a hurry.
 
 ## Security notes
 
-- **TLS is not optional when `TLSConfig` is set.** `MAIL` returns 530 until the
-  client upgrades. This is stricter than RFC 3207 §3.1 requires for a public
-  MX. Gap X5.
+- **TLS is optional by default.** `TLSConfig` offers STARTTLS. `RequireTLS`
+  returns 530 for plaintext `MAIL` and needs `TLSConfig` (E5, S15).
 - **Implicit TLS is captured after the banner write.** The handshake is lazy,
   so `Tx.TLS` is set once the banner is sent (C7).
 - **A handler panic drops the connection.** The server logs `handler_panic` and
@@ -286,8 +285,7 @@ Write for a reader who is tired and in a hurry.
 
 ## Known traps
 
-- `README.md` and `docs/handler-guide.md` did not say that setting `TLSConfig`
-  makes TLS required. The code has always required it.
+- `TLSConfig` offers STARTTLS. It does not require it. `RequireTLS` does.
 - `postcat-replay -addr` takes `host:port`. It does not accept a URL scheme.
 - `MaxMessageSize` cannot be disabled with zero. Zero means the 25 MiB default.
   A negative value disables the limit (gap X18).

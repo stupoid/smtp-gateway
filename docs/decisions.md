@@ -81,7 +81,7 @@ repeat this in three places because users miss it.
 
 ## D5. Setting `TLSConfig` requires TLS for MAIL
 
-**Status:** provisional.
+**Status:** superseded.  **Superseded by:** D15.
 
 **Context:** The initial commit added a 530 response on MAIL when `TLSConfig` is
 set and the connection is not encrypted. No decision entry existed before this
@@ -249,3 +249,21 @@ callbacks.
 **Consequences:** Handlers can return any 3-digit code, including an invalid
 one. The server does not validate the code. The `Resp*` values are shared
 pointers; callers must not mutate them.
+
+## D15. TLS is optional by default
+
+**Status:** accepted.  Supersedes D5.
+
+**Context:** D5 kept a 530 reply on MAIL whenever `TLSConfig` was set. That
+rule contradicts RFC 3207 §3.1 for a public MX. It was also undocumented.
+
+**Decision:** `TLSConfig` offers STARTTLS. It does not require TLS. A new
+`RequireTLS` option rejects plaintext MAIL with 530. `Serve` rejects
+`RequireTLS` without `TLSConfig`. Clause S15 records the guard.
+
+**Rejected:** Keeping the mandatory default and documenting it. It breaks the
+port-25 inbound use case in the README.
+
+**Consequences:** A user who sets `TLSConfig` now accepts plaintext mail. That
+is the RFC-compliant default. A user who needs encryption must set
+`RequireTLS`. This is a behaviour change; the version is still pre-1.0.

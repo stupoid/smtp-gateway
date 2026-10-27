@@ -168,6 +168,9 @@ TLS state lives on `connState`, not on `Tx`. Every new `Tx` copies it, so
 `Tx.TLS` survives RSET and DATA. For implicit TLS the state is captured after
 the banner write, because `tls.Conn` performs the handshake lazily.
 
+`handleMail` returns 530 only when `RequireTLS` is set and `conn.tlsState` is
+nil. The default accepts plaintext mail (E5).
+
 ## Transaction state machine
 
 ```

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # STARTTLS e2e test: generate a self-signed cert, start the test server with
-# TLS enabled, and deliver a message over STARTTLS.
+# TLS enabled, deliver a message over STARTTLS, check that plaintext mail is
+# accepted by default, then check that -require-tls rejects it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source "$(dirname "$0")/_e2e_tools.sh"
@@ -93,17 +94,17 @@ fi
 
 # --------------------------------------------------
 echo ""
-echo "=== Test 2: STARTTLS is required ==="
-# Without --tls, MAIL FROM should get 530.
+echo "=== Test 2: plain-text MAIL is accepted by default ==="
+# RFC 3207 §3.1: STARTTLS must not be required for local delivery.
 "$SWAKS" \
     --to plain@example.com \
     --from plain@example.net \
     --server "$SERVER_ADDR" \
     --quit-after MAIL \
     > "$TMPDIR/swaks-plain.out" 2>&1 || true
-grep -qE '<- 530|<\*\* 530' "$TMPDIR/swaks-plain.out" \
-    && pass "plain-text MAIL rejected with 530 (STARTTLS required)" \
-    || { fail "plain-text MAIL — expected 530 STARTTLS required"; cat "$TMPDIR/swaks-plain.out"; }
+grep -q '250 2.1.0 OK' "$TMPDIR/swaks-plain.out" \
+    && pass "plain-text MAIL accepted" \
+    || { fail "plain-text MAIL — expected 250"; cat "$TMPDIR/swaks-plain.out"; }
 
 sleep 0.5
 
@@ -122,7 +123,33 @@ COUNT=$(find "$POSTCAT_DIR" -name '*.eml' 2>/dev/null | wc -l)
     && pass "exactly 1 postcat file (TLS only)" \
     || fail "expected 1 postcat file, got $COUNT"
 
-grep -qi "panic\|fatal" "$TMPDIR/server.err" 2>/dev/null \
+# --------------------------------------------------
+echo ""
+echo "=== Test 3: RequireTLS rejects plain-text MAIL ==="
+REQUIRE_ADDR="127.0.0.1:12531"
+"$TMPDIR/test-server" -tls-cert "$TMPDIR/cert.pem" -tls-key "$TMPDIR/key.pem" -require-tls \
+    "$REQUIRE_ADDR" "$POSTCAT_DIR" > "$TMPDIR/server-require.out" 2> "$TMPDIR/server-require.err" &
+SERVER_PID=$!
+for i in $(seq 1 30); do
+    if grep -q LISTENING "$TMPDIR/server-require.out" 2>/dev/null; then break; fi
+    sleep 0.1
+done
+grep -q LISTENING "$TMPDIR/server-require.out" || { fail "require-tls server did not start"; cat "$TMPDIR/server-require.err"; exit 1; }
+
+"$SWAKS" \
+    --to plain@example.com \
+    --from plain@example.net \
+    --server "$REQUIRE_ADDR" \
+    --quit-after MAIL \
+    > "$TMPDIR/swaks-require.out" 2>&1 || true
+grep -qE '<- 530|<\*\* 530' "$TMPDIR/swaks-require.out" \
+    && pass "RequireTLS rejects plain-text MAIL with 530" \
+    || { fail "RequireTLS — expected 530"; cat "$TMPDIR/swaks-require.out"; }
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+
+grep -qi "panic\|fatal" "$TMPDIR/server.err" "$TMPDIR/server-require.err" 2>/dev/null \
     && fail "server panicked" \
     || pass "server did not panic"
 

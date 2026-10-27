@@ -503,7 +503,7 @@ func (s *Server) handleStartTLS(
 func (s *Server) handleMail(
 	conn *connState, cmd smtpCmd, tx *Tx, phase int,
 ) *Response {
-	if s.TLSConfig != nil && conn.tlsState == nil {
+	if s.RequireTLS && conn.tlsState == nil {
 		return &Response{530, "5.7.0 STARTTLS required first"}
 	}
 	if tx.Helo == "" {

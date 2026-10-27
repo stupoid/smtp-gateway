@@ -136,3 +136,15 @@ func TestSlogLoggerNilGuard(t *testing.T) {
 	nl.Info("test")
 	nl.Error("test")
 }
+
+func TestNewServerRequireTLS(t *testing.T) {
+	s := NewServer(&acceptAllHandler{})
+	if s.RequireTLS {
+		t.Error("RequireTLS default = true, want false")
+	}
+
+	s = NewServer(&acceptAllHandler{}, WithRequireTLS(true))
+	if !s.RequireTLS {
+		t.Error("WithRequireTLS(true) not applied")
+	}
+}

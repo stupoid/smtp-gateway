@@ -57,6 +57,7 @@ A change to a clause follows the protocol in §16.
 | S12 | `NewServer` MUST resolve the hostname before returning. With a struct literal, `Serve` resolves it. Reading `Hostname` before `Serve` in the literal path yields `""`. | ok* |
 | S13 | `Shutdown` MUST be idempotent. | ok* |
 | S14 | A negative value for `MaxMessageSize`, `MaxConnections`, `MaxRecipients`, `ReadTimeout`, `WriteTimeout`, or `IdleTimeout` MUST be rejected with an error from `Serve`. | gap (X18) |
+| S15 | `RequireTLS` MUST be false by default. `Serve` MUST return an error when `RequireTLS` is true and `TLSConfig` is nil. | ok |
 
 ## 4. Connection model (C)
 
@@ -121,7 +122,7 @@ reading the code and by the concurrency tests.
 | E2 | The server MUST NOT advertise STARTTLS in an EHLO received after a successful TLS handshake, including implicit TLS (RFC 3207 §4.2). | ok |
 | E3 | PIPELINING: the reader MUST accept commands ahead of processing, up to the channel depth of 32. Replies MUST stay in order. DATA, BDAT, and STARTTLS MUST stop read-ahead until the worker finishes. | ok |
 | E4 | STARTTLS MUST require EHLO first (503), MUST return 502 when not configured, and MUST return 503 when TLS is already active. On success the server MUST send 220 and perform the handshake within 30 seconds. | ok |
-| E5 | A publicly referenced server MUST NOT require TLS for local delivery (RFC 3207 §3.1). | gap (X5) |
+| E5 | A publicly referenced server MUST NOT require TLS for local delivery (RFC 3207 §3.1). The default configuration MUST accept plaintext MAIL. `RequireTLS` MAY require TLS for private deployments. | ok |
 | E6 | 8BITMIME: the server MUST advertise it and MUST reject an 8-bit DATA body that arrives without `BODY=8BITMIME` or `SMTPUTF8`, using 550. | ok |
 | E7 | SIZE: the server MUST advertise the limit, reject a larger MAIL `SIZE` parameter, and enforce the limit for DATA and BDAT. | ok |
 | E8 | SMTPUTF8: the server MUST accept UTF-8 in envelope paths and MUST allow 8-bit bodies when the MAIL command carried `SMTPUTF8`. | partial |
@@ -210,7 +211,6 @@ date and an owner, not a licence to keep the behaviour.
 | ID | Severity | Clause | Current behaviour | Evidence | Fix |
 |---|---|---|---|---|---|
 | X4 | High | P17 | `readLine` calls `bufio.Reader.ReadString` and checks the length afterwards, so a long line is buffered in full. An over-long line closes the socket with no reply. | `smtp.go:926-940`; probe: a 1 MiB line produced no response | Read with a bounded buffer, or use `ReadSlice` and count. Return 500 and close after the limit. Add a test at 512 bytes and at 64 KiB. |
-| X5 | High | E5 | When `TLSConfig` is set, MAIL returns 530 until the client upgrades. A public MX then refuses all plaintext mail. | `smtp.go:500-502`; RFC 3207 §3.1 | Add `RequireTLS bool` (default false). Keep 530 only when it is true. Document the change in an ADR. |
 | X6 | Medium | T11 | A non-250 handler response to `BDAT ... LAST` leaves the transaction open. A later BDAT can call `Data` again without MAIL or RCPT. DATA does reset. | `smtp.go:185-191`, `smtp.go:781-791` | Reset phase and `Tx` on any completed LAST, matching DATA. Add a test. |
 | X7 | Medium | F6 | `Parse` looks for `\n\n` before `\r\n\r\n`. A CRLF file whose body contains an LF blank line is truncated at the wrong offset. | `postcat.go:162-170`; reproduced: body `line1\n\nline2` parsed as `line2` | Find the earliest separator of either form, and require it to follow the last record line. Add LF and CRLF tests. |
 | X8 | Low | F5 | `Write` does not close the temp file on early write errors. The descriptor leaks until GC. | `postcat.go:75-95` | Close on every error path, or use a single deferred close. |

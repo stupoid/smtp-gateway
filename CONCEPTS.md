@@ -85,8 +85,7 @@ extensions.
 ### STARTTLS
 
 RFC 3207 upgrade of a plaintext session to TLS. The server advertises it only
-when `TLSConfig` is set. Setting `TLSConfig` currently makes TLS mandatory for
-MAIL; see gap X5.
+when `TLSConfig` is set. TLS remains optional unless `RequireTLS` is set.
 
 ### SMTPS
 

@@ -42,10 +42,11 @@ func main() {
 func run() error {
 	tlsCert := flag.String("tls-cert", "", "TLS certificate file (enables STARTTLS)")
 	tlsKey := flag.String("tls-key", "", "TLS key file (enables STARTTLS)")
+	requireTLS := flag.Bool("require-tls", false, "reject plaintext MAIL with 530")
 	flag.Parse()
 
 	if flag.NArg() < 2 {
-		return errors.New("usage: test-server [-tls-cert cert.pem -tls-key key.pem] <listen-addr> <postcat-dir>")
+		return errors.New("usage: test-server [-tls-cert cert.pem -tls-key key.pem] [-require-tls] <listen-addr> <postcat-dir>")
 	}
 	addr := flag.Arg(0)
 	postcatDir := flag.Arg(1)
@@ -72,6 +73,7 @@ func run() error {
 		}
 		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 	}
+	srv.RequireTLS = *requireTLS
 
 	fmt.Printf("LISTENING %s\n", ln.Addr().String())
 

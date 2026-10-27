@@ -79,8 +79,8 @@ the parameters, checks the `SIZE` parameter, then calls
 - Reject the sender by returning a non-250 response.
 - A `SIZE` value above the limit returns 552 before the callback. The `BODY`
   parameter is not validated here; the 8-bit check runs after DATA.
-- Setting `TLSConfig` makes the server return 530 for MAIL until the client
-  upgrades. See gap X5.
+- Plaintext MAIL is accepted by default. Setting `RequireTLS` returns 530
+  until the client upgrades.
 
 ### 4. RCPT TO: phaseRcpt
 
@@ -134,8 +134,8 @@ If `TLSConfig` is set, the client can issue STARTTLS after EHLO. After a
 successful handshake the server discards the HELO state; the client must send
 EHLO again. `tx.TLS` is populated with the connection state.
 
-The server does not advertise STARTTLS again after the handshake. It currently
-requires TLS for MAIL (gap X5). Implicit TLS through a `tls.Listener` also
+The server does not advertise STARTTLS again after the handshake. Plaintext
+MAIL is accepted unless `RequireTLS` is set. Implicit TLS through a `tls.Listener` also
 populates `tx.TLS` (C7).
 
 ## Handler contract invariants
@@ -159,7 +159,8 @@ populates `tx.TLS` (C7).
 | Reject sender | Return non-250 from `MailFrom` |
 | Accept or reject a recipient | Return 250 or non-250 from `RcptTo` |
 | Store or reject the message | `Data` gets the raw bytes; return 250 to accept |
-| Enable STARTTLS | Set `Server.TLSConfig` or use `WithTLSConfig(cfg)`. TLS becomes required |
+| Enable STARTTLS | Set `Server.TLSConfig` or use `WithTLSConfig(cfg)`. TLS stays optional |
+| Require TLS before MAIL | Set `Server.RequireTLS` or use `WithRequireTLS(true)` |
 | Enable SMTPS | Pass a `tls.Listener` to `Serve` |
 | Limit message size | `Server.MaxMessageSize` or `WithMaxMessageSize(n)` |
 | Limit recipients | `Server.MaxRecipients` or `WithMaxRecipients(n)` |

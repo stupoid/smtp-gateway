@@ -98,10 +98,9 @@ are serial, so per-connection state needs no lock.
 
 - **`nil` becomes 503.** Returning `nil` from any callback sends
   `503 5.5.1 Bad sequence of commands`. Use the `Resp*` constants to accept.
-- **`TLSConfig` makes STARTTLS mandatory.** When `TLSConfig` is set, `MAIL`
-  returns `530 5.7.0 STARTTLS required first` until the client upgrades. There
-  is no opportunistic-TLS mode yet (gap X5). This is stricter than RFC 3207
-  §3.1 requires for a public MX.
+- **TLS is optional by default.** `TLSConfig` advertises STARTTLS but accepts
+  plaintext mail. This follows RFC 3207 §3.1 for a public MX. Set `RequireTLS`
+  to reject plaintext `MAIL` with `530`.
 - **Don't mutate `tx`.** The server owns it; read only.
 - **Copy the body if you keep it.** The server does not promise the slice's
   lifetime after the callback returns.
@@ -118,7 +117,8 @@ are serial, so per-connection state needs no lock.
 | Reject sender | Return non-250 from `Handler.MailFrom` |
 | Accept/reject individual recipients | Return 250/non-250 from `Handler.RcptTo` |
 | Store or reject the message body | `Handler.Data` gets the raw bytes |
-| Enable STARTTLS (and require it) | `Server.TLSConfig` | `WithTLSConfig(cfg)` |
+| Enable STARTTLS (optional) | `Server.TLSConfig` | `WithTLSConfig(cfg)` |
+| Require TLS before MAIL | `Server.RequireTLS` | `WithRequireTLS(true)` |
 | Enable SMTPS (implicit TLS) | Pass a `tls.Listener` to `Serve` |
 | Limit message size | `Server.MaxMessageSize` | `WithMaxMessageSize(n)` |
 | Limit recipients | `Server.MaxRecipients` | `WithMaxRecipients(n)` |
@@ -145,9 +145,16 @@ ln, _ := net.Listen("tcp", ":587")
 srv.Serve(ln)
 ```
 
-With `TLSConfig` set, the server advertises STARTTLS and **requires** it.
-Plaintext `MAIL` gets 530. For an opportunistic setup, leave `TLSConfig` nil
-until a require-TLS option lands (gap X5).
+With `TLSConfig` set, the server advertises STARTTLS but does not require it.
+Plaintext mail is accepted, which is the RFC 3207 §3.1 behaviour for a public
+MX. To reject plaintext `MAIL` with 530, set `RequireTLS`:
+
+```go
+srv := smtpgateway.NewServer(handler,
+	smtpgateway.WithTLSConfig(cfg),
+	smtpgateway.WithRequireTLS(true),
+)
+```
 
 For implicit TLS (SMTPS, port 465), wrap the listener:
 
@@ -164,7 +171,7 @@ The SMTPS path works and `Tx.TLS` is populated.
 |---|---|
 | EHLO / HELO | Yes |
 | PIPELINING (RFC 2920) | Yes |
-| STARTTLS (RFC 3207) | Yes, required when configured (X5) |
+| STARTTLS (RFC 3207) | Yes; optional by default; `RequireTLS` makes it mandatory |
 | SMTPS (implicit TLS) | Yes via `tls.Listener`; `Tx.TLS` is populated |
 | 8BITMIME | Advertised; enforced for DATA only |
 | ENHANCEDSTATUSCODES | Advertised; the 354 reply has no 2.x.x code |

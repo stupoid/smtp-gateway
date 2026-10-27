@@ -167,9 +167,12 @@ type Server struct {
 	// advertises STARTTLS in EHLO and upgrades the connection
 	// when the client issues the command.
 	//
-	// Setting this field also makes TLS required: MAIL returns 530
-	// until the connection is encrypted.
 	TLSConfig *tls.Config
+
+	// RequireTLS rejects MAIL with 530 until the connection is protected
+	// by TLS.  It requires TLSConfig.  The default is false: STARTTLS is
+	// offered, but plaintext mail is accepted.
+	RequireTLS bool
 
 	// Handler receives callbacks for each SMTP transaction phase.
 	// Required — Serve returns an error if nil.
@@ -268,6 +271,10 @@ func WithHostname(v string) ServerOption { return func(s *Server) { s.Hostname =
 // WithTLSConfig sets the TLS configuration for STARTTLS support.
 func WithTLSConfig(v *tls.Config) ServerOption { return func(s *Server) { s.TLSConfig = v } }
 
+// WithRequireTLS requires TLS before MAIL.  Serve returns an error when
+// RequireTLS is true and TLSConfig is nil.
+func WithRequireTLS(v bool) ServerOption { return func(s *Server) { s.RequireTLS = v } }
+
 // WithMaxMessageSize sets the maximum message size in bytes.
 func WithMaxMessageSize(v int) ServerOption { return func(s *Server) { s.MaxMessageSize = v } }
 
@@ -310,6 +317,9 @@ func NewSlogLogger(l *slog.Logger) Logger {
 func (s *Server) Serve(ln net.Listener) error {
 	if s.Handler == nil {
 		return errors.New("smtpgateway: Handler is nil")
+	}
+	if s.RequireTLS && s.TLSConfig == nil {
+		return errors.New("smtpgateway: RequireTLS needs TLSConfig")
 	}
 	if s.PostcatDir != "" {
 		if err := os.MkdirAll(s.PostcatDir, 0750); err != nil {
