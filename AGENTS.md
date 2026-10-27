@@ -182,8 +182,8 @@ the minor version, and update every implementation in the repo: `cmd/test-server
 ### Change the postcat format
 
 The format is a file contract. Add a decision entry. Change
-`FormatEnvelope` first, then make `Write` use it, then update `Parse`. Add a
-round-trip test and a parse test for old files.
+`writeEnvelope`; `FormatEnvelope` and `Write` both use it. Then update `Parse`.
+Add a round-trip test and a parse test for old files.
 
 ### Fix a known gap
 

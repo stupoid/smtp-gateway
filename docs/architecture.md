@@ -229,12 +229,13 @@ calls `postcat.Write`:
 4. `os.Rename` to `<unix>-<nanosecond>-<random>.eml`.
 
 The rename makes the file appear atomically: a reader sees the complete file or
-nothing. The directory is not fsynced, so the file may not survive a power loss
-(gap X9). The write is best effort: the handler already returned 250, so a
-failure is logged and the client still gets 250.
+nothing. The file is fsynced; the directory sync is best effort, so a power
+loss can still lose the file on some filesystems. The write is best effort: the
+handler already returned 250, so a failure is logged and the client still gets
+250.
 
-`FormatEnvelope` is documented as the single formatter, but `Write` duplicates
-the record loop today (gap X11).
+`FormatEnvelope` and `Write` share `writeEnvelope`, so the in-memory and
+on-disk bytes cannot drift.
 
 ## Shutdown
 

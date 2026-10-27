@@ -173,11 +173,11 @@ reading the code and by the concurrency tests.
 | F2 | The null sender MUST be written as `<>`. | ok |
 | F3 | CR and LF in envelope addresses MUST be removed before writing. | ok* |
 | F4 | The server MUST write the file only after the handler returns 250, and MUST treat the write as best effort. A write failure MUST NOT change the SMTP reply. | ok |
-| F5 | The write MUST use a temporary file in the target directory and an atomic rename. An error MUST NOT leave a partial file. | ok |
-| F6 | `Parse` MUST accept LF and CRLF envelopes and MUST locate the first blank line after the envelope records. | gap (X7) |
-| F7 | `FormatEnvelope` SHOULD be the only formatter of the record section. `Write` MUST use it. | gap (X11) |
+| F5 | The write MUST use a temporary file in the target directory and an atomic rename. Every error path MUST close and remove the temporary file. The file MUST be fsynced. The directory SHOULD be synced where the OS supports it. | ok |
+| F6 | `Parse` MUST accept LF and CRLF envelopes and MUST use the earliest blank line as the separator. | ok |
+| F7 | `FormatEnvelope` and `Write` MUST share one record writer. | ok |
 | F8 | The file name MUST be unique. The current form is `<unix>-<nanosecond>-<random>.eml`. | ok |
-| F9 | The format is Postfix-style, not the Postfix queue-file format, and not `postcat(1)` output. Documentation MUST NOT claim compatibility without an interoperability test. | gap (X10) |
+| F9 | The format is Postfix-style, not the Postfix queue-file format, and not `postcat(1)` output. Documentation MUST NOT claim compatibility without an interoperability test. | ok |
 | F10 | `Parse` MUST return an error when a `T` record is present but not RFC 3339. A file without a separator MUST parse as an empty message with no body. | ok |
 
 ## 12. Quality gates (Q)
@@ -210,11 +210,6 @@ date and an owner, not a licence to keep the behaviour.
 
 | ID | Severity | Clause | Current behaviour | Evidence | Fix |
 |---|---|---|---|---|---|
-| X7 | Medium | F6 | `Parse` looks for `\n\n` before `\r\n\r\n`. A CRLF file whose body contains an LF blank line is truncated at the wrong offset. | `postcat.go:162-170`; reproduced: body `line1\n\nline2` parsed as `line2` | Find the earliest separator of either form, and require it to follow the last record line. Add LF and CRLF tests. |
-| X8 | Low | F5 | `Write` does not close the temp file on early write errors. The descriptor leaks until GC. | `postcat.go:75-95` | Close on every error path, or use a single deferred close. |
-| X9 | Low | F5 | The file is fsynced but the directory is not. The rename survives a process crash but not a power loss. | `postcat.go:101-112` | Sync the directory before returning, or state the weaker guarantee in `docs/postcat.md`. |
-| X10 | Low | F9 | Docs call the format "Postfix-compatible". `postcat(1)` prints Postfix queue files, which this format is not. The `T` record is RFC 3339, not an epoch. | `README.md`, `docs/postcat.md`, `internal/postcat/postcat.go` package doc; initial commit message | Say "Postfix-style". Add an evidence note. Do not claim compatibility. |
-| X11 | Medium | F7 | `FormatEnvelope` is documented as the single authority but `Write` duplicates the record code. `FormatEnvelope` has 0% coverage. | `postcat.go:35-47` vs `postcat.go:75-84`; `go tool cover` | Make `Write` call `FormatEnvelope`, or extract a record writer. Add a test. |
 | X12 | Medium | Q5 | `go.mod` declares Go 1.21. CI tests only 1.26, so a dependency or syntax that raises the floor is not caught. | `go.mod:3`, `.github/workflows/ci.yml` | Add a CI job with `go-version-file: go.mod`. |
 | X13 | Medium | Q4 | No fuzz targets exist. All four CLI packages have 0% coverage. | `grep -r "func Fuzz" .` returns nothing; `go tool cover` | Add fuzz tests for the parsers and body reader. Add one test per CLI. |
 | X14 | Low | Q6 | The repository has no tags. `go get` resolves a pseudo-version. | `git tag` is empty | Tag `v0.1.0` when the API is ready. |

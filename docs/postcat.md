@@ -42,9 +42,10 @@ File names are `<unix>-<nanosecond>-<random>.eml`. Files are created with mode
 
 ## Durability
 
-The writer uses `CreateTemp`, flush, fsync, close, rename. The rename is atomic:
-a reader sees the completed file or nothing. The directory is not fsynced, so a
-power loss can lose the file even though the process returned success (gap X9).
+The writer uses `CreateTemp`, write, fsync, close, rename. The rename is atomic:
+a reader sees the completed file or nothing. The writer also attempts a
+directory sync. On a filesystem without directory sync, a power loss can still
+lose the file even though the process returned success.
 
 The server calls the writer after `Handler.Data` has returned 250. A write
 failure is logged as `postcat_write_error` and does not change the SMTP reply.
@@ -110,9 +111,9 @@ fmt.Println(msg.Time)        // timestamp from the T record
 fmt.Println(msg.RawMessage)  // raw RFC 5322 bytes
 ```
 
-`Parse` reads the envelope up to the first blank line. A CRLF file whose body
-contains an LF-only blank line can be split at the wrong offset (gap X7). A
-missing `T` record leaves `Time` zero. A malformed `T` record is an error.
+`Parse` reads the envelope up to the earliest blank line, so mixed line endings
+are handled. A missing `T` record leaves `Time` zero. A malformed `T` record is
+an error.
 
 ### Building envelope bytes
 
@@ -121,10 +122,8 @@ raw := postcat.FormatEnvelope(mailFrom, accepted, time.Now(), body)
 // raw is the complete postcat file; write to S3, gzip, etc.
 ```
 
-`FormatEnvelope` produces the record section and body. `Write` currently repeats
-the same formatting instead of calling it (gap X11). Both produce the same
-bytes; keep the timestamp format and the record order in one place when you
-change either.
+`FormatEnvelope` produces the complete file in memory. It uses the same record
+writer as `Write`, so the bytes match.
 
 ### Utility
 

@@ -9,11 +9,11 @@
 package postcat
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,20 +30,32 @@ type Message struct {
 
 // FormatEnvelope returns the complete postcat-format bytes for a message:
 // envelope records (S, R, T lines), a blank separator, and the raw body.
-// This is the reference layout. Write streams the same records to disk;
-// keep the two in sync.
+// It uses writeEnvelope, the same record writer as Write.
 func FormatEnvelope(mailFrom string, accepted []string, t time.Time, body []byte) []byte {
 	var buf bytes.Buffer
-
-	fmt.Fprintf(&buf, "S %s\n", sanitizeAddr(FormatNullSender(mailFrom)))
-	for _, rcpt := range accepted {
-		fmt.Fprintf(&buf, "R %s\n", sanitizeAddr(rcpt))
-	}
-	fmt.Fprintf(&buf, "T %s\n", t.Format(time.RFC3339))
-	buf.WriteByte('\n') // envelope/body separator
+	_ = writeEnvelope(&buf, mailFrom, accepted, t)
 	buf.Write(body)
-
 	return buf.Bytes()
+}
+
+// writeEnvelope writes the S, R, and T records and the blank separator.
+// It is the single record writer for FormatEnvelope and Write.
+func writeEnvelope(w io.Writer, mailFrom string, accepted []string, t time.Time) error {
+	if _, err := fmt.Fprintf(w, "S %s\n", sanitizeAddr(FormatNullSender(mailFrom))); err != nil {
+		return fmt.Errorf("write sender record: %w", err)
+	}
+	for _, rcpt := range accepted {
+		if _, err := fmt.Fprintf(w, "R %s\n", sanitizeAddr(rcpt)); err != nil {
+			return fmt.Errorf("write recipient record: %w", err)
+		}
+	}
+	if _, err := fmt.Fprintf(w, "T %s\n", t.Format(time.RFC3339)); err != nil {
+		return fmt.Errorf("write timestamp record: %w", err)
+	}
+	if _, err := io.WriteString(w, "\n"); err != nil {
+		return fmt.Errorf("write separator: %w", err)
+	}
+	return nil
 }
 
 // Write writes an accepted message to dir.  The file is named
@@ -52,9 +64,11 @@ func FormatEnvelope(mailFrom string, accepted []string, t time.Time, body []byte
 // records followed by a blank line and the raw message.
 //
 // The write is atomic in the directory: data is written to a temporary
-// file and renamed into place on success.  This prevents both partial-file
-// artefacts and filename collisions under concurrent writes.  The
-// directory is not fsynced, so the file may not survive a power loss.
+// file and renamed into place on success.  The file is fsynced, and the
+// directory is synced where the OS supports it.  A power loss can still
+// lose the file on a filesystem without directory sync.
+//
+// Every error path closes the temporary file and removes it.
 func Write(dir, mailFrom string, accepted []string, body []byte) (string, error) {
 	now := time.Now()
 	var rnd [4]byte
@@ -67,49 +81,45 @@ func Write(dir, mailFrom string, accepted []string, body []byte) (string, error)
 	if err != nil {
 		return path, fmt.Errorf("create postcat temp file: %w", err)
 	}
-	defer func() { _ = os.Remove(f.Name()) }()
-
-	w := bufio.NewWriter(f)
-
-	// Envelope records.
-	if _, err := fmt.Fprintf(w, "S %s\n", sanitizeAddr(FormatNullSender(mailFrom))); err != nil {
-		return path, fmt.Errorf("write sender record: %w", err)
-	}
-	for _, rcpt := range accepted {
-		if _, err := fmt.Fprintf(w, "R %s\n", sanitizeAddr(rcpt)); err != nil {
-			return path, fmt.Errorf("write recipient record: %w", err)
+	tmp := f.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = f.Close()
+			_ = os.Remove(tmp)
 		}
-	}
-	if _, err := fmt.Fprintf(w, "T %s\n", now.Format(time.RFC3339)); err != nil {
-		return path, fmt.Errorf("write timestamp record: %w", err)
-	}
+	}()
 
-	// Blank envelope separator.
-	if err := w.WriteByte('\n'); err != nil {
-		return path, fmt.Errorf("write separator: %w", err)
+	if err := writeEnvelope(f, mailFrom, accepted, now); err != nil {
+		return path, err
 	}
-
-	// Raw message.
-	if _, err := w.Write(body); err != nil {
+	if _, err := f.Write(body); err != nil {
 		return path, fmt.Errorf("write body: %w", err)
 	}
-
-	if err := w.Flush(); err != nil {
-		_ = f.Close()
-		return path, fmt.Errorf("flush postcat file: %w", err)
-	}
 	if err := f.Sync(); err != nil {
-		_ = f.Close()
 		return path, fmt.Errorf("sync postcat file: %w", err)
 	}
 	if err := f.Close(); err != nil {
 		return path, fmt.Errorf("close postcat file: %w", err)
 	}
-
-	if err := os.Rename(f.Name(), path); err != nil {
+	if err := os.Rename(tmp, path); err != nil {
 		return path, fmt.Errorf("rename postcat file: %w", err)
 	}
+	cleanup = false
+
+	syncDir(dir)
 	return path, nil
+}
+
+// syncDir flushes the directory entry after a rename.  Some filesystems do
+// not support directory fsync, so the error is ignored.
+func syncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	_ = d.Sync()
+	_ = d.Close()
 }
 
 // Parse reads a postcat-format file from path and returns the parsed
@@ -157,16 +167,24 @@ func Parse(path string) (*Message, error) {
 	return m, nil
 }
 
-// findBlankLine returns the byte index of the blank line separator and its
-// length (2 for "\n\n", 4 for "\r\n\r\n"), or (-1, 0) if not found.
+// findBlankLine returns the byte index of the earliest blank line separator
+// and its length (2 for "\n\n", 4 for "\r\n\r\n"), or (-1, 0) if not found.
+// The earliest match is the envelope separator; a later match is body text.
 func findBlankLine(b []byte) (int, int) {
-	if i := bytes.Index(b, []byte("\n\n")); i >= 0 {
-		return i, 2
+	lf := bytes.Index(b, []byte("\n\n"))
+	crlf := bytes.Index(b, []byte("\r\n\r\n"))
+	switch {
+	case lf < 0 && crlf < 0:
+		return -1, 0
+	case lf < 0:
+		return crlf, 4
+	case crlf < 0:
+		return lf, 2
+	case lf < crlf:
+		return lf, 2
+	default:
+		return crlf, 4
 	}
-	if i := bytes.Index(b, []byte("\r\n\r\n")); i >= 0 {
-		return i, 4
-	}
-	return -1, 0
 }
 
 // FormatNullSender returns "<>" for an empty or null sender, or the sender

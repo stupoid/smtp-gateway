@@ -1,6 +1,7 @@
 package postcat
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -289,5 +290,50 @@ func TestWritePreservesTimestamp(t *testing.T) {
 
 	if parsed.Before(b) || parsed.After(a) {
 		t.Errorf("timestamp %v not in expected range [%v, %v]", msg.Time, before, after)
+	}
+}
+
+// TestParseCRLFWithLFBlankLineInBody verifies that the parser uses the
+// earliest blank line as the envelope separator.  A CRLF envelope followed
+// by an LF-only blank line in the body used to truncate the message.
+func TestParseCRLFWithLFBlankLineInBody(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mixed.eml")
+	content := "S a@b\r\nR c@d\r\nT 2026-01-02T03:04:05Z\r\n\r\nline1\n\nline2\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	msg, err := Parse(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got, want := string(msg.RawMessage), "line1\n\nline2\n"; got != want {
+		t.Errorf("RawMessage = %q, want %q", got, want)
+	}
+}
+
+// TestFormatEnvelopeMatchesWrite verifies that the in-memory formatter and
+// the on-disk writer produce identical bytes.
+func TestFormatEnvelopeMatchesWrite(t *testing.T) {
+	dir := t.TempDir()
+	body := []byte("From: a@b\r\n\r\nbody\r\n")
+
+	path, err := Write(dir, "s@t.com", []string{"r1@t.com", "r2@t.com"}, body)
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	msg, err := Parse(path)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	got := FormatEnvelope("s@t.com", []string{"r1@t.com", "r2@t.com"}, msg.Time, body)
+	if !bytes.Equal(got, raw) {
+		t.Errorf("FormatEnvelope and Write differ:\nformat=%q\nwrite =%q", got, raw)
 	}
 }
