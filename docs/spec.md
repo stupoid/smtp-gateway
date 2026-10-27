@@ -117,8 +117,8 @@ reading the code and by the concurrency tests.
 
 | ID | Requirement | Status |
 |---|---|---|
-| E1 | EHLO MUST advertise exactly these capabilities: PIPELINING, 8BITMIME, ENHANCEDSTATUSCODES, SMTPUTF8, CHUNKING, and `SIZE <bytes>` when the limit is positive. It MUST add STARTTLS when `TLSConfig` is set. | ok |
-| E2 | The server MUST NOT advertise STARTTLS in an EHLO received after a successful TLS handshake (RFC 3207 §4.2). | gap (X2) |
+| E1 | EHLO MUST advertise exactly these capabilities: PIPELINING, 8BITMIME, ENHANCEDSTATUSCODES, SMTPUTF8, CHUNKING, and `SIZE <bytes>` when the limit is positive. It MUST add STARTTLS when `TLSConfig` is set and the session is not yet protected by TLS. | ok |
+| E2 | The server MUST NOT advertise STARTTLS in an EHLO received after a successful TLS handshake, including implicit TLS (RFC 3207 §4.2). | ok |
 | E3 | PIPELINING: the reader MUST accept commands ahead of processing, up to the channel depth of 32. Replies MUST stay in order. DATA, BDAT, and STARTTLS MUST stop read-ahead until the worker finishes. | ok |
 | E4 | STARTTLS MUST require EHLO first (503), MUST return 502 when not configured, and MUST return 503 when TLS is already active. On success the server MUST send 220 and perform the handshake within 30 seconds. | ok |
 | E5 | A publicly referenced server MUST NOT require TLS for local delivery (RFC 3207 §3.1). | gap (X5) |
@@ -209,7 +209,6 @@ date and an owner, not a licence to keep the behaviour.
 
 | ID | Severity | Clause | Current behaviour | Evidence | Fix |
 |---|---|---|---|---|---|
-| X2 | High | E2 | EHLO after a successful STARTTLS still lists STARTTLS. A second STARTTLS then returns 503. RFC 3207 §4.2 forbids the advertisement. | `smtp.go:432-434`; no test | Add `&& !tlsReady` to the advertisement. Add a test that asserts the post-TLS EHLO list has no STARTTLS. |
 | X4 | High | P17 | `readLine` calls `bufio.Reader.ReadString` and checks the length afterwards, so a long line is buffered in full. An over-long line closes the socket with no reply. | `smtp.go:926-940`; probe: a 1 MiB line produced no response | Read with a bounded buffer, or use `ReadSlice` and count. Return 500 and close after the limit. Add a test at 512 bytes and at 64 KiB. |
 | X5 | High | E5 | When `TLSConfig` is set, MAIL returns 530 until the client upgrades. A public MX then refuses all plaintext mail. | `smtp.go:500-502`; RFC 3207 §3.1 | Add `RequireTLS bool` (default false). Keep 530 only when it is true. Document the change in an ADR. |
 | X6 | Medium | T11 | A non-250 handler response to `BDAT ... LAST` leaves the transaction open. A later BDAT can call `Data` again without MAIL or RCPT. DATA does reset. | `smtp.go:185-191`, `smtp.go:781-791` | Reset phase and `Tx` on any completed LAST, matching DATA. Add a test. |

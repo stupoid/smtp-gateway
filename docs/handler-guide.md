@@ -134,7 +134,7 @@ If `TLSConfig` is set, the client can issue STARTTLS after EHLO. After a
 successful handshake the server discards the HELO state; the client must send
 EHLO again. `tx.TLS` is populated with the connection state.
 
-The server currently advertises STARTTLS again after the handshake (gap X2) and
+The server does not advertise STARTTLS again after the handshake. It currently
 requires TLS for MAIL (gap X5). Implicit TLS through a `tls.Listener` also
 populates `tx.TLS` (C7).
 

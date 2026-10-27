@@ -431,7 +431,7 @@ func (s *Server) handleGreeting(
 	ext = append(ext, "ENHANCEDSTATUSCODES")
 	ext = append(ext, "SMTPUTF8")
 	ext = append(ext, "CHUNKING")
-	if s.TLSConfig != nil {
+	if s.TLSConfig != nil && conn.tlsState == nil {
 		ext = append(ext, "STARTTLS")
 	}
 	if s.MaxMessageSize > 0 {

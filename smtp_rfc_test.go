@@ -844,9 +844,14 @@ func TestSMTPStartTLS(t *testing.T) {
 	conn = tlsConn
 	scanner = bufio.NewScanner(conn)
 
-	// Re-EHLO over TLS.
+	// Re-EHLO over TLS.  RFC 3207 §4.2 forbids advertising STARTTLS
+	// again after the handshake.
 	write(t, conn, "EHLO client\r\n")
-	_ = readMultiline(t, scanner)
+	for _, line := range readMultiline(t, scanner) {
+		if strings.Contains(line, "STARTTLS") {
+			t.Errorf("STARTTLS advertised after the handshake: %s", line)
+		}
+	}
 
 	// Complete a transaction over TLS.
 	write(t, conn, "MAIL FROM:<s@t>\r\n")
@@ -862,6 +867,46 @@ func TestSMTPStartTLS(t *testing.T) {
 
 	_ = l.Close()
 	_ = srv.Shutdown(context.Background())
+}
+
+func TestSMTPSDoesNotAdvertiseStartTLS(t *testing.T) {
+	cert := testCert(t)
+	cfg := &tls.Config{Certificates: []tls.Certificate{cert}}
+
+	srv := &Server{
+		Hostname:  "test.local",
+		Handler:   &acceptAllHandler{},
+		TLSConfig: cfg,
+	}
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(tls.NewListener(l, cfg)) }()
+
+	conn, err := tls.Dial("tcp", l.Addr().String(), &tls.Config{
+		InsecureSkipVerify: true,
+		ServerName:         "test.local",
+	})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	scanner := bufio.NewScanner(conn)
+	if !scanner.Scan() {
+		t.Fatalf("no banner: %v", scanner.Err())
+	}
+
+	write(t, conn, "EHLO client\r\n")
+	for _, line := range readMultiline(t, scanner) {
+		if strings.Contains(line, "STARTTLS") {
+			t.Errorf("STARTTLS advertised on an implicit TLS connection: %s", line)
+		}
+	}
+	write(t, conn, "QUIT\r\n")
+	_ = readResp(t, scanner)
 }
 
 func TestSMTPStartTLSRequiresHelo(t *testing.T) {

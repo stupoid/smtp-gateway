@@ -296,4 +296,3 @@ Write for a reader who is tired and in a hurry.
   struct-literal path.
 - `IdleTimeout` has no effect when `ReadTimeout` is set (gap X19). `Serve`
   always makes `ReadTimeout` non-zero.
-- The STARTTLS re-advertisement (`X2`) has no test yet.
