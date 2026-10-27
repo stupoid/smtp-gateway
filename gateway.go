@@ -320,6 +320,21 @@ func (s *Server) Serve(ln net.Listener) error {
 	if s.RequireTLS && s.TLSConfig == nil {
 		return errors.New("smtpgateway: RequireTLS needs TLSConfig")
 	}
+	for _, field := range []struct {
+		name string
+		bad  bool
+	}{
+		{"MaxMessageSize", s.MaxMessageSize < 0},
+		{"MaxRecipients", s.MaxRecipients < 0},
+		{"MaxConnections", s.MaxConnections < 0},
+		{"ReadTimeout", s.ReadTimeout < 0},
+		{"WriteTimeout", s.WriteTimeout < 0},
+		{"IdleTimeout", s.IdleTimeout < 0},
+	} {
+		if field.bad {
+			return fmt.Errorf("smtpgateway: %s must not be negative", field.name)
+		}
+	}
 	if s.PostcatDir != "" {
 		if err := os.MkdirAll(s.PostcatDir, 0750); err != nil {
 			return fmt.Errorf("smtpgateway: PostcatDir: %w", err)

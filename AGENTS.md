@@ -287,8 +287,8 @@ Write for a reader who is tired and in a hurry.
 
 - `TLSConfig` offers STARTTLS. It does not require it. `RequireTLS` does.
 - `postcat-replay -addr` takes `host:port`. It does not accept a URL scheme.
-- `MaxMessageSize` cannot be disabled with zero. Zero means the 25 MiB default.
-  A negative value disables the limit (gap X18).
+- `MaxMessageSize` cannot be disabled. Zero means the 25 MiB default, and
+  `Serve` rejects a negative value (S14).
 - `NewServer` resolves the hostname eagerly. A struct literal resolves it in
   `Serve`. Reading `s.Hostname` before `Serve` returns an empty string in the
   struct-literal path.

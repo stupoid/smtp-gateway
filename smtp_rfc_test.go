@@ -2556,3 +2556,34 @@ func TestSMTPBDATBadCommandDiscardsPartial(t *testing.T) {
 	}
 	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
 }
+
+// TestServeRejectsNegativeConfig verifies that a negative limit or
+// duration fails fast.  Before this test, a negative value silently
+// disabled the feature: MaxMessageSize -1 removed the size limit.
+func TestServeRejectsNegativeConfig(t *testing.T) {
+	tests := []struct {
+		name  string
+		apply func(*Server)
+	}{
+		{"MaxMessageSize", func(s *Server) { s.MaxMessageSize = -1 }},
+		{"MaxRecipients", func(s *Server) { s.MaxRecipients = -1 }},
+		{"MaxConnections", func(s *Server) { s.MaxConnections = -1 }},
+		{"ReadTimeout", func(s *Server) { s.ReadTimeout = -time.Second }},
+		{"WriteTimeout", func(s *Server) { s.WriteTimeout = -time.Second }},
+		{"IdleTimeout", func(s *Server) { s.IdleTimeout = -time.Second }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := &Server{Handler: &acceptAllHandler{}}
+			tt.apply(srv)
+			l, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			t.Cleanup(func() { _ = l.Close() })
+			if err := srv.Serve(l); err == nil {
+				t.Fatalf("Serve accepted a negative %s", tt.name)
+			}
+		})
+	}
+}

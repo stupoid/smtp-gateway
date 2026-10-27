@@ -47,7 +47,7 @@ A change to a clause follows the protocol in §16.
 | S2 | `Serve` MUST create `PostcatDir` with mode 0750 when the directory does not exist. | ok* |
 | S3 | `Serve` MUST default zero-value fields: `Hostname` from `os.Hostname()` (fallback `localhost`), `MaxMessageSize` to 25 MiB, `ReadTimeout` to 5 minutes, `IdleTimeout` to 5 minutes. | ok |
 | S4 | `NewServer` MUST apply the same defaults eagerly and then apply options in order. The last option for a field wins. | ok |
-| S5 | `MaxMessageSize == 0` MUST mean the default. It MUST NOT be possible to disable the size limit. | gap (X18) |
+| S5 | `MaxMessageSize == 0` MUST mean the default. It MUST NOT be possible to disable the size limit. | ok |
 | S6 | `MaxConnections == 0` MUST mean unlimited. A positive value MUST cap concurrent connections. | ok |
 | S7 | Callers MUST NOT read or mutate `Server` fields after `Serve` starts. `Serve` is not safe for concurrent configuration. | contract |
 | S8 | `Serve` MUST return `nil` when `Accept` fails after `Shutdown`, and the listener error otherwise. | ok* |
@@ -56,7 +56,7 @@ A change to a clause follows the protocol in §16.
 | S11 | A `Server` MUST serve one listener once. Reusing it for a second `Serve` is not supported. | contract |
 | S12 | `NewServer` MUST resolve the hostname before returning. With a struct literal, `Serve` resolves it. Reading `Hostname` before `Serve` in the literal path yields `""`. | ok* |
 | S13 | `Shutdown` MUST be idempotent. | ok* |
-| S14 | A negative value for `MaxMessageSize`, `MaxConnections`, `MaxRecipients`, `ReadTimeout`, `WriteTimeout`, or `IdleTimeout` MUST be rejected with an error from `Serve`. | gap (X18) |
+| S14 | A negative value for `MaxMessageSize`, `MaxConnections`, `MaxRecipients`, `ReadTimeout`, `WriteTimeout`, or `IdleTimeout` MUST be rejected with an error from `Serve`. | ok |
 | S15 | `RequireTLS` MUST be false by default. `Serve` MUST return an error when `RequireTLS` is true and `TLSConfig` is nil. | ok |
 
 ## 4. Connection model (C)
@@ -221,7 +221,6 @@ date and an owner, not a licence to keep the behaviour.
 | X15 | Low | S6 | Rejected connections at `MaxConnections` are closed with no 421 and logged at Error. A flood of connections floods the error log. | `gateway.go:351-358` | Send a 421 with a short deadline, then close. Log at Info or rate-limit. |
 | X16 | Low | P16 | HELP returns 500. RFC 5321 §4.1.1.8 says servers SHOULD support it. | `smtp.go:205-207` | Return a short 214 multi-line reply. |
 | X17 | Medium | G5 | `smtp_recv` logs the full command arguments at Info, including sender and recipient addresses. | `smtp.go:260-263` | Log the verb at Info and the arguments at Debug, or add a redaction option. Document the change. |
-| X18 | Low | S5, S14 | A negative limit or duration silently disables the feature instead of failing. `MaxMessageSize: -1` removes the size limit and the SIZE advertisement; negative timeouts remove deadlines. | `gateway.go:328-336` only defaults `== 0`; `smtp.go:306-315`, `smtp.go:926-929` test `> 0` | Validate configuration in `Serve` and return an error. Add a table-driven test with negative values. |
 
 Severity: High means protocol non-compliance or a denial-of-service risk.
 Medium means data loss, interop risk, or a broken promise in the docs. Low means
