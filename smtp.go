@@ -21,8 +21,9 @@ import (
 // --- SMTP protocol helpers ---
 
 type smtpCmd struct {
-	verb string // upper-case verb: HELO, MAIL, RCPT, DATA, etc.
-	args string // everything after the verb, trimmed
+	verb    string // upper-case verb: HELO, MAIL, RCPT, DATA, etc.
+	args    string // everything after the verb, trimmed
+	tooLong bool   // internal: the line exceeded maxLineLength
 }
 
 // parseSMTPCommand splits "VERB args\r\n" into verb and args.
@@ -134,7 +135,16 @@ func (s *Server) handleConn(netConn net.Conn) {
 			// a guard to every individual verb handler, and the preamble
 			// is the single choke-point for BDAT state cleanup (bodyBuf)
 			// when a disallowed command arrives mid-sequence.
-			if inBdat && !isAllowedDuringBdat(cmd.verb) {
+			switch {
+			case cmd.tooLong:
+				// The reader drained the line, so the stream stays
+				// aligned.  Abandon an open BDAT sequence.
+				if inBdat {
+					inBdat = false
+					conn.resetBodyBuf()
+				}
+				resp = &Response{500, "5.5.2 Line too long"}
+			case inBdat && !isAllowedDuringBdat(cmd.verb):
 				if cmd.verb == "DATA" || cmd.verb == "STARTTLS" {
 					resumeCh <- struct{}{}
 				}
@@ -142,7 +152,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 				// must not leak into the next BDAT transaction.
 				conn.resetBodyBuf()
 				resp = &Response{503, "5.5.1 Bad sequence of commands"}
-			} else {
+			default:
 				switch cmd.verb {
 				case "HELO":
 					var next *Tx
@@ -247,6 +257,13 @@ func (s *Server) readCommands(
 	for {
 		line, err := readLine(conn.r, s.readDeadline(), conn)
 		if err != nil {
+			if errors.Is(err, ErrLineTooLong) {
+				select {
+				case events <- smtpCmd{tooLong: true}:
+				case <-conn.ctx.Done():
+				}
+				continue
+			}
 			if !errors.Is(err, io.EOF) && !isTimeout(err) {
 				s.logError("read_error", slog.String("error", err.Error()))
 			}
@@ -302,6 +319,7 @@ func (s *Server) readCommands(
 // protocol stream stays synchronised.
 func readDotUnstuffed(r *bufio.Reader, maxSize int, conn *connState, readTimeout time.Duration) ([]byte, error) {
 	var buf []byte
+	tooLong := false
 	if maxSize > 0 {
 		// Start small — most messages are well under the limit.
 		// pre-allocating maxSize (25 MiB by default) wastes heap
@@ -313,12 +331,24 @@ func readDotUnstuffed(r *bufio.Reader, maxSize int, conn *connState, readTimeout
 	for {
 		line, err := readLine(r, readTimeout, conn)
 		if err != nil {
+			if errors.Is(err, ErrLineTooLong) {
+				// readLine drained the line.  Discard the rest of the
+				// body so the next command starts at a line boundary.
+				tooLong = true
+				continue
+			}
 			return buf, fmt.Errorf("reading body: %w", err)
 		}
 		// Terminator: a line consisting solely of ".\r\n" → readLine
 		// returns ".\r\n" stripped to "." (or just ".").
 		if line == "." {
+			if tooLong {
+				return buf, ErrLineTooLong
+			}
 			return buf, nil
+		}
+		if tooLong {
+			continue
 		}
 		// Dot-stuffing: if the line starts with ".", remove the leading dot.
 		if len(line) > 0 && line[0] == '.' {
@@ -331,6 +361,9 @@ func readDotUnstuffed(r *bufio.Reader, maxSize int, conn *connState, readTimeout
 			// return immediately — the overflow was already detected.
 			for {
 				drainLine, drainErr := readLine(r, readTimeout, conn)
+				if errors.Is(drainErr, ErrLineTooLong) {
+					continue
+				}
 				if drainErr != nil {
 					return buf, ErrMessageTooLarge
 				}
@@ -596,6 +629,9 @@ func (s *Server) handleData(
 		conn, s.readDeadline(),
 	)
 	if err != nil {
+		if errors.Is(err, ErrLineTooLong) {
+			return &Response{500, "5.5.2 Line too long"}
+		}
 		if errors.Is(err, ErrMessageTooLarge) {
 			return RespMessageSize
 		}
@@ -917,8 +953,8 @@ func (c *connState) Close() error {
 	return c.netConn.Close()
 }
 
-// maxLineLength is the maximum SMTP command line length.  Lines exceeding
-// this are rejected to prevent unbounded buffer growth in bufio.Reader.
+// maxLineLength is the maximum accepted line length, excluding CRLF.
+// A longer line is drained in bounded memory and answered with 500.
 const maxLineLength = 65536
 
 // maxBDATChunk is the maximum size of a single BDAT chunk.  A client that
@@ -939,20 +975,49 @@ func (s *Server) readDeadline() time.Duration {
 	return s.ReadTimeout
 }
 
+// ErrLineTooLong is returned by readLine when a line exceeds maxLineLength.
+// The rest of the line is drained before the error returns, so the caller
+// can continue at the next line boundary.
+var ErrLineTooLong = errors.New("line too long")
+
+// readLine reads a line from r, handling both \r\n and bare \n.
+// Returns the line without the trailing newline sequence.
+// If readTimeout > 0, sets a per-read deadline before the first read.
+// An over-long line is drained in bounded memory and reported as
+// ErrLineTooLong.
 func readLine(r *bufio.Reader, readTimeout time.Duration, conn *connState) (string, error) {
 	if readTimeout > 0 {
 		conn.SetReadDeadline(time.Now().Add(readTimeout))
 	}
-	line, err := r.ReadString('\n')
-	if err != nil {
+
+	line := make([]byte, 0, 256)
+	tooLong := false
+	for {
+		frag, err := r.ReadSlice('\n')
+		if !tooLong && len(line)+len(frag) > maxLineLength+2 {
+			tooLong = true
+		}
+		if !tooLong {
+			line = append(line, frag...)
+		}
+		if err == nil {
+			break
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
 		return "", err
 	}
-	if len(line) > maxLineLength {
-		return "", errors.New("line too long")
+	if tooLong {
+		return "", ErrLineTooLong
 	}
-	line = strings.TrimSuffix(line, "\r\n")
-	line = strings.TrimSuffix(line, "\n")
-	return line, nil
+
+	text := strings.TrimSuffix(string(line), "\r\n")
+	text = strings.TrimSuffix(text, "\n")
+	if len(text) > maxLineLength {
+		return "", ErrLineTooLong
+	}
+	return text, nil
 }
 
 func isTimeout(err error) bool {

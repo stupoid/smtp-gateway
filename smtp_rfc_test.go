@@ -2405,3 +2405,48 @@ func TestSMTPIdleTimeoutResetsOnActivity(t *testing.T) {
 		t.Fatalf("connection stayed open after idle: %q", scanner.Text())
 	}
 }
+
+// TestSMTPCommandLineTooLong verifies that an over-long command line is
+// drained, answered with 500, and does not desynchronise the session.
+// Before this test, the server buffered the whole line and closed the
+// socket with no reply.
+func TestSMTPCommandLineTooLong(t *testing.T) {
+	conn, scanner := dialServer(t)
+
+	write(t, conn, strings.Repeat("A", 70*1024)+"\r\n")
+	resp := readResp(t, scanner)
+	if !strings.HasPrefix(resp, "500") {
+		t.Fatalf("expected 500 for an over-long line, got %q", resp)
+	}
+
+	// The reader drained the line, so the next command is aligned.
+	sendAndExpect(t, conn, scanner, "EHLO client\r\n", "250")
+	_ = readMultiline(t, scanner)
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
+// TestSMTPDataLineTooLong verifies that an over-long body line is
+// drained to the terminating dot, answered with 500, and resets the
+// transaction.  The client can start a new transaction afterwards.
+func TestSMTPDataLineTooLong(t *testing.T) {
+	conn, scanner := dialServer(t)
+
+	sendAndExpect(t, conn, scanner, "EHLO client\r\n", "250")
+	_ = readMultiline(t, scanner)
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "DATA\r\n", "354")
+
+	write(t, conn, strings.Repeat("B", 70*1024)+"\r\n")
+	write(t, conn, "tail\r\n")
+	write(t, conn, ".\r\n")
+
+	resp := readResp(t, scanner)
+	if !strings.HasPrefix(resp, "500") {
+		t.Fatalf("expected 500 for an over-long body line, got %q", resp)
+	}
+
+	// The body was drained and the transaction was reset.
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s2@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}

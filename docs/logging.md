@@ -70,7 +70,7 @@ The `args` are key=value pairs using `slog.String`, `slog.Int`,
 | Event | Keys | Meaning |
 |-------|------|---------|
 | `banner_write_error` | `error` | Failed to write 220 banner |
-| `read_error` | `error` | Reader goroutine read failure other than a timeout or EOF (for example, an over-long line) |
+| `read_error` | `error` | Reader goroutine read failure other than a timeout, EOF, or an over-long line |
 | `write_error` | `error` | Worker goroutine write failure |
 | `handler_panic` | `panic` (any) | Panic recovered in worker goroutine |
 | `reader_panic` | `panic` (any) | Panic recovered in reader goroutine |

@@ -111,7 +111,7 @@ reading the code and by the concurrency tests.
 | P14 | QUIT MUST return 221 and close the session. | ok |
 | P15 | An unknown verb MUST return 500. | ok |
 | P16 | HELP SHOULD return helpful text (RFC 5321 §4.1.1.8). | gap (X16) |
-| P17 | An over-long command line MUST be rejected with a reply, not by a bare close, and the server MUST NOT buffer it without bound. | gap (X4) |
+| P17 | An over-long line MUST be drained in bounded memory and answered with 500. The session MUST stay aligned. A too-long DATA line MUST be discarded to the terminating dot, then bounce the message. | ok |
 | P18 | A bare LF MUST terminate a line. A dot-stuffed line that ends with bare LF MUST NOT be treated as the end of data. | ok |
 
 ## 7. Extensions (E)
@@ -210,7 +210,6 @@ date and an owner, not a licence to keep the behaviour.
 
 | ID | Severity | Clause | Current behaviour | Evidence | Fix |
 |---|---|---|---|---|---|
-| X4 | High | P17 | `readLine` calls `bufio.Reader.ReadString` and checks the length afterwards, so a long line is buffered in full. An over-long line closes the socket with no reply. | `smtp.go:926-940`; probe: a 1 MiB line produced no response | Read with a bounded buffer, or use `ReadSlice` and count. Return 500 and close after the limit. Add a test at 512 bytes and at 64 KiB. |
 | X6 | Medium | T11 | A non-250 handler response to `BDAT ... LAST` leaves the transaction open. A later BDAT can call `Data` again without MAIL or RCPT. DATA does reset. | `smtp.go:185-191`, `smtp.go:781-791` | Reset phase and `Tx` on any completed LAST, matching DATA. Add a test. |
 | X7 | Medium | F6 | `Parse` looks for `\n\n` before `\r\n\r\n`. A CRLF file whose body contains an LF blank line is truncated at the wrong offset. | `postcat.go:162-170`; reproduced: body `line1\n\nline2` parsed as `line2` | Find the earliest separator of either form, and require it to follow the last record line. Add LF and CRLF tests. |
 | X8 | Low | F5 | `Write` does not close the temp file on early write errors. The descriptor leaks until GC. | `postcat.go:75-95` | Close on every error path, or use a single deferred close. |
