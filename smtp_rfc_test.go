@@ -383,7 +383,6 @@ func TestSMTPUnknownCommand(t *testing.T) {
 	sendAndExpect(t, conn, scanner, "EHLO t\r\n", "250")
 	_ = readMultiline(t, scanner)
 
-	sendAndExpect(t, conn, scanner, "HELP\r\n", "500")
 	sendAndExpect(t, conn, scanner, "FOOBAR\r\n", "500")
 	sendAndExpect(t, conn, scanner, "X-BOGUS 1 2 3\r\n", "500")
 
@@ -2591,4 +2590,13 @@ func TestServeRejectsNegativeConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSMTPHelp verifies RFC 5321 §4.1.1.8.  HELP used to return 500.
+func TestSMTPHelp(t *testing.T) {
+	conn, scanner := dialServer(t)
+
+	sendAndExpect(t, conn, scanner, "HELP\r\n", "214")
+	sendAndExpect(t, conn, scanner, "HELP MAIL\r\n", "214")
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
 }

@@ -168,6 +168,7 @@ The SMTPS path works and `Tx.TLS` is populated.
 | Feature | Status |
 |---|---|
 | EHLO / HELO | Yes |
+| HELP | Yes (214) |
 | PIPELINING (RFC 2920) | Yes |
 | STARTTLS (RFC 3207) | Yes; optional by default; `RequireTLS` makes it mandatory |
 | SMTPS (implicit TLS) | Yes via `tls.Listener`; `Tx.TLS` is populated |

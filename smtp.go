@@ -224,6 +224,10 @@ func (s *Server) handleConn(netConn net.Conn) {
 					inBdat = false
 				case "NOOP":
 					resp = &Response{250, "2.0.0 OK"}
+				case "HELP":
+					// RFC 5321 §4.1.1.8.  Argument text is optional
+					// and ignored.
+					resp = &Response{214, "2.0.0 HELO EHLO MAIL RCPT DATA BDAT RSET NOOP VRFY EXPN QUIT"}
 				case "VRFY", "EXPN":
 					resp = RespVrfyDisabled
 				case "QUIT":

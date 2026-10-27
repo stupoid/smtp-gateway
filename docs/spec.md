@@ -110,7 +110,7 @@ reading the code and by the concurrency tests.
 | P13 | VRFY and EXPN MUST return 252. | ok |
 | P14 | QUIT MUST return 221 and close the session. | ok |
 | P15 | An unknown verb MUST return 500. | ok |
-| P16 | HELP SHOULD return helpful text (RFC 5321 §4.1.1.8). | gap (X16) |
+| P16 | HELP MUST return a 214 reply with the supported commands (RFC 5321 §4.1.1.8). An argument is optional and ignored. | ok |
 | P17 | An over-long line MUST be drained in bounded memory and answered with 500. The session MUST stay aligned. A too-long DATA line MUST be discarded to the terminating dot, then bounce the message. | ok |
 | P18 | A bare LF MUST terminate a line. A dot-stuffed line that ends with bare LF MUST NOT be treated as the end of data. | ok |
 
@@ -218,7 +218,6 @@ date and an owner, not a licence to keep the behaviour.
 | X12 | Medium | Q5 | `go.mod` declares Go 1.21. CI tests only 1.26, so a dependency or syntax that raises the floor is not caught. | `go.mod:3`, `.github/workflows/ci.yml` | Add a CI job with `go-version-file: go.mod`. |
 | X13 | Medium | Q4 | No fuzz targets exist. All four CLI packages have 0% coverage. | `grep -r "func Fuzz" .` returns nothing; `go tool cover` | Add fuzz tests for the parsers and body reader. Add one test per CLI. |
 | X14 | Low | Q6 | The repository has no tags. `go get` resolves a pseudo-version. | `git tag` is empty | Tag `v0.1.0` when the API is ready. |
-| X16 | Low | P16 | HELP returns 500. RFC 5321 §4.1.1.8 says servers SHOULD support it. | `smtp.go:205-207` | Return a short 214 multi-line reply. |
 | X17 | Medium | G5 | `smtp_recv` logs the full command arguments at Info, including sender and recipient addresses. | `smtp.go:260-263` | Log the verb at Info and the arguments at Debug, or add a redaction option. Document the change. |
 
 Severity: High means protocol non-compliance or a denial-of-service risk.
