@@ -285,7 +285,8 @@ func (s *Server) readCommands(
 		}
 
 		verb, args := parseSMTPCommand(line)
-		s.logInfo("smtp_recv",
+		s.logInfo("smtp_recv", slog.String("verb", verb))
+		s.logDebug("smtp_recv_args",
 			slog.String("verb", verb),
 			slog.String("args", truncate(args, 120)),
 		)

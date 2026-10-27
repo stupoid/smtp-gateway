@@ -280,8 +280,9 @@ Write for a reader who is tired and in a hurry.
   closes. It does not send 451. Do not use panics for control flow.
 - **Postcat is best effort.** The client gets 250 before the file is written.
   Do not use it where durability matters.
-- **Info logs include envelope addresses.** `smtp_recv` logs every command.
-  Treat the log stream as personal data. Gap X17.
+- **Logs contain personal data.** Info message events carry the envelope
+  sender. Debug `smtp_recv_args` carries command arguments. Set retention
+  accordingly (G5).
 
 ## Known traps
 

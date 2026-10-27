@@ -163,7 +163,7 @@ reading the code and by the concurrency tests.
 | G2 | Levels MUST follow the event catalog in `docs/logging.md`: connection lifecycle at Debug, command, message, and capacity events at Info, failures at Error. | ok |
 | G3 | Event names and keys MUST match `docs/logging.md`. Change the code and the catalog in one commit. | ok |
 | G4 | Logged client input MUST have control characters removed and MUST be length-bounded. | ok |
-| G5 | The default Info stream SHOULD NOT contain full envelope addresses. It currently does (`smtp_recv`). Operators MUST treat the log stream as personal data. | gap (X17) |
+| G5 | The Info stream MUST NOT contain SMTP command arguments. Message events MAY contain the envelope sender. Operators MUST treat the log stream as personal data. | ok |
 
 ## 11. Postcat files (F)
 
@@ -218,7 +218,6 @@ date and an owner, not a licence to keep the behaviour.
 | X12 | Medium | Q5 | `go.mod` declares Go 1.21. CI tests only 1.26, so a dependency or syntax that raises the floor is not caught. | `go.mod:3`, `.github/workflows/ci.yml` | Add a CI job with `go-version-file: go.mod`. |
 | X13 | Medium | Q4 | No fuzz targets exist. All four CLI packages have 0% coverage. | `grep -r "func Fuzz" .` returns nothing; `go tool cover` | Add fuzz tests for the parsers and body reader. Add one test per CLI. |
 | X14 | Low | Q6 | The repository has no tags. `go get` resolves a pseudo-version. | `git tag` is empty | Tag `v0.1.0` when the API is ready. |
-| X17 | Medium | G5 | `smtp_recv` logs the full command arguments at Info, including sender and recipient addresses. | `smtp.go:260-263` | Log the verb at Info and the arguments at Debug, or add a redaction option. Document the change. |
 
 Severity: High means protocol non-compliance or a denial-of-service risk.
 Medium means data loss, interop risk, or a broken promise in the docs. Low means

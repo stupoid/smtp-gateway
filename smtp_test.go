@@ -1115,3 +1115,65 @@ func (h *acceptAllHandler) Hello(_ context.Context, _ *Tx) *Response          { 
 func (h *acceptAllHandler) MailFrom(_ context.Context, _ *Tx) *Response       { return RespMailOK }
 func (h *acceptAllHandler) RcptTo(_ context.Context, _ *Tx) *Response         { return RespRcptOK }
 func (h *acceptAllHandler) Data(_ context.Context, _ *Tx, _ []byte) *Response { return RespDataOK }
+
+// logCapture records Info messages and their arguments.
+type logCapture struct {
+	mu       sync.Mutex
+	infos    []string
+	infoArgs [][]any
+}
+
+func (l *logCapture) Debug(string, ...any) {}
+
+func (l *logCapture) Info(msg string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.infos = append(l.infos, msg)
+	l.infoArgs = append(l.infoArgs, append([]any(nil), args...))
+}
+
+func (l *logCapture) Error(string, ...any) {}
+
+// TestInfoLogOmitsCommandArgs verifies that envelope data stays out of
+// the default Info stream.  Command arguments are logged at Debug.
+func TestInfoLogOmitsCommandArgs(t *testing.T) {
+	rec := &logCapture{}
+	srv := &Server{
+		Hostname:    "test.local",
+		Handler:     &acceptAllHandler{},
+		ReadTimeout: 2 * time.Second,
+		Logger:      rec,
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+
+	conn, scanner := dialAndReadBanner(t, l.Addr().String())
+	defer func() { _ = conn.Close() }()
+
+	sendAndExpect(t, conn, scanner, "EHLO client\r\n", "250")
+	_ = readMultiline(t, scanner)
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<secret@example.com>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	seen := false
+	for i, msg := range rec.infos {
+		if msg != "smtp_recv" {
+			continue
+		}
+		seen = true
+		for _, arg := range rec.infoArgs[i] {
+			if strings.Contains(fmt.Sprint(arg), "secret@example.com") {
+				t.Fatalf("Info log leaked command arguments: %v", rec.infoArgs[i])
+			}
+		}
+	}
+	if !seen {
+		t.Fatal("no smtp_recv Info event")
+	}
+}

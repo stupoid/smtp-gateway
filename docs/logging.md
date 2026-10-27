@@ -5,8 +5,9 @@ interface follows `log/slog` conventions: all variadic args are key=value
 pairs. The event catalog below is normative; see clause G3 in
 [spec.md](spec.md).
 
-The Info stream contains envelope addresses (`smtp_recv`, `data_received`).
-Treat it as personal data and set retention accordingly (gap X17).
+The Info stream contains the envelope sender on message events. The Debug
+stream contains command arguments, including envelope paths. Treat both streams
+as personal data and set retention accordingly.
 
 ## Quick start
 
@@ -55,7 +56,13 @@ The `args` are key=value pairs using `slog.String`, `slog.Int`,
 
 | Event | Keys | Meaning |
 |-------|------|---------|
-| `smtp_recv` | `verb` (string), `args` (string, control characters stripped, truncated to 120 chars) | Every SMTP command line received |
+| `smtp_recv` | `verb` (string) | Every SMTP command line received |
+
+### Command arguments (Debug)
+
+| Event | Keys | Meaning |
+|-------|------|---------|
+| `smtp_recv_args` | `verb` (string), `args` (string, control characters stripped, truncated to 120 chars) | Command arguments. Contains envelope paths |
 
 ### Message reception (Info)
 
@@ -97,10 +104,11 @@ The `args` are key=value pairs using `slog.String`, `slog.Int`,
 
 ```
 connection_opened  (Debug, remote=1.2.3.4:56789)
-smtp_recv          (Info,  verb=EHLO, args=mx.example.com)
-smtp_recv          (Info,  verb=MAIL, args=FROM:<sender@example.com>)
-smtp_recv          (Info,  verb=RCPT, args=TO:<recipient@example.com>)
-smtp_recv          (Info,  verb=DATA, args=)
+smtp_recv          (Info,  verb=EHLO)
+smtp_recv          (Info,  verb=MAIL)
+smtp_recv          (Info,  verb=RCPT)
+smtp_recv          (Info,  verb=DATA)
+smtp_recv_args     (Debug, verb=MAIL, args=FROM:<sender@example.com>)
 data_received      (Info,  bytes=1234, mail_from=sender@example.com, recipients=1)
 connection_closed  (Debug, remote=1.2.3.4:56789)
 ```

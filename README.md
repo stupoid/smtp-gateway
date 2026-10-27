@@ -246,8 +246,9 @@ srv.Logger = smtpgateway.NewSlogLogger(slog.New(slog.NewTextHandler(f, nil)))
 Key events: `connection_opened` / `connection_closed` (Debug), `smtp_recv` /
 `data_received` (Info), `read_error` / `tls_handshake_error` (Error).
 
-`smtp_recv` logs every command with its arguments at Info, including envelope
-addresses. Treat the log stream as personal data (gap X17).
+`smtp_recv` logs the verb at Info. The arguments, including envelope paths, are
+logged at Debug. Message events include the envelope sender. Treat both streams
+as personal data.
 
 → [Logging guide](docs/logging.md) (full event catalog, custom adapters)
 
