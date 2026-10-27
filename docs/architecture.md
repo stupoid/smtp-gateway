@@ -68,7 +68,8 @@ socket does. The 50 ms delay lets the worker notice the context first and send
 ## Read and write paths
 
 Reads: `readLine` uses `bufio.Reader.ReadString('\n')`. It strips CRLF or LF.
-The line limit check happens after the read (gap X4).
+The line limit check happens after the read (gap X4). The read deadline is the
+smaller of `IdleTimeout` and `ReadTimeout` (`Server.readDeadline`).
 
 Writes: `connState.write` holds a mutex, sets a write deadline when
 `WriteTimeout > 0`, writes one string, flushes, and clears the deadline. Only
@@ -257,7 +258,7 @@ The caller must close the listener. `Shutdown` does not close it (S10).
 | Trigger | Server action | What the client sees |
 |---|---|---|
 | Peer closes | Reader sees EOF, closes `events`, worker returns | Nothing; socket closed |
-| Read timeout | Reader returns, closes `events` | Socket closed, no reply |
+| Read or idle timeout | Reader returns, closes `events` | Socket closed, no reply |
 | Command line over 64 KiB | Reader returns | Socket closed, no reply (X4) |
 | Handler panic | Recover, log `handler_panic`, close | Socket closed, no reply |
 | Reader panic | Recover, log `reader_panic`, close | Socket closed, no reply |

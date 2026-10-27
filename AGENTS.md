@@ -292,5 +292,3 @@ Write for a reader who is tired and in a hurry.
 - `NewServer` resolves the hostname eagerly. A struct literal resolves it in
   `Serve`. Reading `s.Hostname` before `Serve` returns an empty string in the
   struct-literal path.
-- `IdleTimeout` has no effect when `ReadTimeout` is set (gap X19). `Serve`
-  always makes `ReadTimeout` non-zero.

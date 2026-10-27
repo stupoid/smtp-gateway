@@ -203,10 +203,9 @@ type Server struct {
 	// WriteTimeout is the per-response write deadline.  0 means no deadline.
 	WriteTimeout time.Duration
 
-	// IdleTimeout is the intended inactivity limit.  Defaults to
-	// 5 minutes.  The current code overwrites this deadline with
-	// ReadTimeout before each read, so it has no effect when
-	// ReadTimeout is non-zero.
+	// IdleTimeout is the maximum inactivity before the server closes
+	// the connection.  Defaults to 5 minutes.  The effective per-read
+	// deadline is the smaller of IdleTimeout and ReadTimeout.
 	IdleTimeout time.Duration
 
 	// Logger receives structured log events.  If nil, logging is

@@ -148,7 +148,7 @@ reading the code and by the concurrency tests.
 |---|---|---|
 | L1 | `ReadTimeout` is a per-read deadline, not a whole-session budget. The default is 5 minutes. Zero is replaced by the default. | ok |
 | L2 | `WriteTimeout` is a per-response deadline. Zero means no deadline. | ok |
-| L3 | `IdleTimeout` MUST close a connection after the configured inactivity, independent of `ReadTimeout`. | gap (X19) |
+| L3 | `IdleTimeout` MUST close a connection after the configured inactivity. The effective per-read deadline MUST be the smaller of `IdleTimeout` and `ReadTimeout`. | ok |
 | L4 | `MaxMessageSize` limits DATA and the total BDAT body. It applies to the unstuffed size. | ok |
 | L5 | A single BDAT chunk MUST NOT exceed 64 MiB, independent of `MaxMessageSize`. | ok* |
 | L6 | The TLS handshake deadline is 30 seconds and is not configurable. | ok* |
@@ -224,7 +224,6 @@ date and an owner, not a licence to keep the behaviour.
 | X16 | Low | P16 | HELP returns 500. RFC 5321 §4.1.1.8 says servers SHOULD support it. | `smtp.go:205-207` | Return a short 214 multi-line reply. |
 | X17 | Medium | G5 | `smtp_recv` logs the full command arguments at Info, including sender and recipient addresses. | `smtp.go:260-263` | Log the verb at Info and the arguments at Debug, or add a redaction option. Document the change. |
 | X18 | Low | S5, S14 | A negative limit or duration silently disables the feature instead of failing. `MaxMessageSize: -1` removes the size limit and the SIZE advertisement; negative timeouts remove deadlines. | `gateway.go:328-336` only defaults `== 0`; `smtp.go:306-315`, `smtp.go:926-929` test `> 0` | Validate configuration in `Serve` and return an error. Add a table-driven test with negative values. |
-| X19 | High | L3 | `IdleTimeout` has no effect when `ReadTimeout` is non-zero. `readCommands` sets the idle deadline, then `readLine` overwrites it with the read deadline. `Serve` always makes `ReadTimeout` non-zero. A 300 ms idle timeout with a 10 s read timeout stayed open for 1 s. | `smtp.go:241-247`, `smtp.go:926-929`, `gateway.go:331-336`; probe in the review | Compute the smaller deadline once per read, or apply the idle deadline only between commands and the read deadline only during a read. Add a test with a short idle timeout. |
 
 Severity: High means protocol non-compliance or a denial-of-service risk.
 Medium means data loss, interop risk, or a broken promise in the docs. Low means

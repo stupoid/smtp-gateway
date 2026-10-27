@@ -93,11 +93,6 @@ func (s *Server) handleConn(netConn net.Conn) {
 		s.logDebug("connection_closed", slog.String("remote", remote))
 	}()
 
-	// Apply read deadlines and idle timeout.
-	if s.IdleTimeout > 0 {
-		conn.SetReadDeadline(time.Now().Add(s.IdleTimeout))
-	}
-
 	// Send banner.
 	if err := conn.write(fmt.Sprintf("220 %s ESMTP\r\n", s.Hostname), s.WriteTimeout); err != nil {
 		s.logError("banner_write_error", slog.String("error", err.Error()))
@@ -250,22 +245,12 @@ func (s *Server) readCommands(
 	}()
 
 	for {
-		// Apply idle deadline if configured.
-		if s.IdleTimeout > 0 {
-			conn.SetReadDeadline(time.Now().Add(s.IdleTimeout))
-		}
-
-		line, err := readLine(conn.r, s.ReadTimeout, conn)
+		line, err := readLine(conn.r, s.readDeadline(), conn)
 		if err != nil {
 			if !errors.Is(err, io.EOF) && !isTimeout(err) {
 				s.logError("read_error", slog.String("error", err.Error()))
 			}
 			return
-		}
-
-		// Reset idle deadline after successful read.
-		if s.IdleTimeout > 0 {
-			conn.SetReadDeadline(time.Now().Add(s.IdleTimeout))
 		}
 
 		verb, args := parseSMTPCommand(line)
@@ -606,11 +591,9 @@ func (s *Server) handleData(
 	if err := conn.write(RespStartMail.String(), s.WriteTimeout); err != nil {
 		return &Response{451, "4.3.0 System error"}
 	}
-	readTimeout := s.ReadTimeout
-
 	body, err := readDotUnstuffed(
 		conn.r, s.MaxMessageSize,
-		conn, readTimeout,
+		conn, s.readDeadline(),
 	)
 	if err != nil {
 		if errors.Is(err, ErrMessageTooLarge) {
@@ -710,7 +693,7 @@ func (s *Server) handleBdat(
 
 	// Apply a read deadline for chunk reads so a slow client doesn't
 	// block the worker goroutine indefinitely.
-	readTimeout := s.ReadTimeout
+	readDeadline := s.readDeadline()
 
 	var size int
 	var last bool
@@ -723,8 +706,8 @@ func (s *Server) handleBdat(
 		*inBdat = false
 		conn.resetBodyBuf()
 		if size > 0 {
-			if readTimeout > 0 {
-				conn.SetReadDeadline(time.Now().Add(readTimeout))
+			if readDeadline > 0 {
+				conn.SetReadDeadline(time.Now().Add(readDeadline))
 			}
 			if _, discErr := conn.r.Discard(size); discErr != nil {
 				s.logError("bdat_read_error", slog.String("error", discErr.Error()))
@@ -757,7 +740,7 @@ func (s *Server) handleBdat(
 	}
 
 	// Read the chunk data.
-	chunk, err := readNBytes(conn.r, size, conn, readTimeout)
+	chunk, err := readNBytes(conn.r, size, conn, readDeadline)
 	if err != nil {
 		s.logError("bdat_read_error", slog.String("error", err.Error()))
 		*inBdat = false
@@ -947,6 +930,15 @@ const maxBDATChunk = 64 << 20
 // readLine reads a line from r, handling both \r\n and bare \n.
 // Returns the line without the trailing newline sequence.
 // If readTimeout > 0, sets a per-read deadline before calling ReadString.
+// readDeadline returns the effective per-read timeout.  IdleTimeout bounds
+// inactivity and ReadTimeout bounds a single read.  The smaller value wins.
+func (s *Server) readDeadline() time.Duration {
+	if s.IdleTimeout > 0 && (s.ReadTimeout <= 0 || s.IdleTimeout < s.ReadTimeout) {
+		return s.IdleTimeout
+	}
+	return s.ReadTimeout
+}
+
 func readLine(r *bufio.Reader, readTimeout time.Duration, conn *connState) (string, error) {
 	if readTimeout > 0 {
 		conn.SetReadDeadline(time.Now().Add(readTimeout))

@@ -2332,3 +2332,76 @@ func TestServeRejectsRequireTLSWithoutConfig(t *testing.T) {
 		t.Fatal("Serve accepted RequireTLS without TLSConfig")
 	}
 }
+
+// TestSMTPTimeoutClosesIdleConnection verifies that the effective
+// per-read deadline is the smaller of IdleTimeout and ReadTimeout.
+// Before this test, IdleTimeout was overwritten by ReadTimeout and had
+// no effect.
+func TestSMTPTimeoutClosesIdleConnection(t *testing.T) {
+	tests := []struct {
+		name string
+		read time.Duration
+		idle time.Duration
+	}{
+		{"idle shorter than read", 10 * time.Second, 300 * time.Millisecond},
+		{"read shorter than idle", 300 * time.Millisecond, 10 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := &Server{
+				Hostname:    "test.local",
+				Handler:     &acceptAllHandler{},
+				ReadTimeout: tt.read,
+				IdleTimeout: tt.idle,
+			}
+			l, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			t.Cleanup(func() { _ = l.Close() })
+			go func() { _ = srv.Serve(l) }()
+
+			conn, scanner := dialAndReadBanner(t, l.Addr().String())
+			defer func() { _ = conn.Close() }()
+
+			time.Sleep(1 * time.Second)
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			if scanner.Scan() {
+				t.Fatalf("connection stayed open: %q", scanner.Text())
+			}
+		})
+	}
+}
+
+// TestSMTPIdleTimeoutResetsOnActivity verifies that each command resets
+// the idle clock.  A connection that sends one command per interval
+// stays open past the idle timeout.
+func TestSMTPIdleTimeoutResetsOnActivity(t *testing.T) {
+	srv := &Server{
+		Hostname:    "test.local",
+		Handler:     &acceptAllHandler{},
+		ReadTimeout: 10 * time.Second,
+		IdleTimeout: 1 * time.Second,
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+
+	conn, scanner := dialAndReadBanner(t, l.Addr().String())
+	defer func() { _ = conn.Close() }()
+
+	for i := 0; i < 4; i++ {
+		time.Sleep(200 * time.Millisecond)
+		sendAndExpect(t, conn, scanner, "NOOP\r\n", "250")
+	}
+
+	// No activity for longer than the idle timeout closes the session.
+	time.Sleep(2 * time.Second)
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if scanner.Scan() {
+		t.Fatalf("connection stayed open after idle: %q", scanner.Text())
+	}
+}

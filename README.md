@@ -106,8 +106,6 @@ are serial, so per-connection state needs no lock.
   lifetime after the callback returns.
 - **Configure before `Serve`.** Server fields are read concurrently by
   connections. Changing them after `Serve` starts is a data race.
-- **`IdleTimeout` currently has no effect.** When `ReadTimeout` is set,
-  `readLine` overwrites the idle deadline (gap X19).
 
 ## Customising behaviour
 
