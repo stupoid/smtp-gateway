@@ -188,9 +188,15 @@ phaseHelo --> phaseInit : RSET
 MAIL is required, a new HELO is not (clause T7). The difference in enum value is
 an implementation detail, not a contract.
 
-`Tx` is created at connection start and replaced on RSET, after DATA, and after
-a successful BDAT LAST. `tx.Rcpts` accumulates every presented recipient.
+`Tx` is created at connection start. A new `Tx` replaces it on RSET, after DATA,
+after a successful BDAT LAST, on a later HELO/EHLO, and on a successful
+STARTTLS. The reset paths keep the HELO state. STARTTLS and a new greeting set
+it from scratch. `tx.Rcpts` accumulates every presented recipient.
 `tx.Accepted` and `tx.Rejected` record the handler's decisions.
+
+A later HELO/EHLO from any phase returns the machine to `phaseHelo` and clears
+the envelope. A greeting the handler rejects leaves the state unchanged
+(RFC 5321 §4.1.4).
 
 ## Handler contract
 

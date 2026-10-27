@@ -110,10 +110,8 @@ func (s *Server) handleConn(netConn net.Conn) {
 	tx := s.newTx(conn)
 
 	var (
-		phase    = phaseInit
-		gotHelo  bool
-		tlsReady bool
-		inBdat   bool
+		phase  = phaseInit
+		inBdat bool
 
 		// Pipelining: reader sends commands to a channel.
 		events   = make(chan smtpCmd, 32)
@@ -152,28 +150,39 @@ func (s *Server) handleConn(netConn net.Conn) {
 			} else {
 				switch cmd.verb {
 				case "HELO":
-					resp, gotHelo = s.handleHelo(conn, cmd, tx, gotHelo)
-					if gotHelo {
+					var next *Tx
+					resp, next = s.handleHelo(conn, cmd)
+					if next != nil {
+						tx = next
 						phase = phaseHelo
+						inBdat = false
+						conn.resetBodyBuf()
 					}
 				case "EHLO":
-					resp, gotHelo = s.handleEhlo(conn, cmd, tx, gotHelo)
-					if gotHelo {
+					var next *Tx
+					resp, next = s.handleEhlo(conn, cmd)
+					if next != nil {
+						tx = next
 						phase = phaseHelo
+						inBdat = false
+						conn.resetBodyBuf()
 					}
 				case "STARTTLS":
-					resp, tlsReady = s.handleStartTLS(conn, tx, gotHelo, tlsReady, resumeCh)
-					if tlsReady {
-						gotHelo = false
+					var next *Tx
+					resp, next = s.handleStartTLS(conn, tx, resumeCh)
+					if next != nil {
+						tx = next
 						phase = phaseInit
+						inBdat = false
+						conn.resetBodyBuf()
 					}
 				case "MAIL":
-					resp = s.handleMail(conn, cmd, tx, phase, gotHelo, tlsReady)
+					resp = s.handleMail(conn, cmd, tx, phase)
 					if resp.Code == 250 {
 						phase = phaseMail
 					}
 				case "RCPT":
-					resp = s.handleRcpt(conn, cmd, tx, &phase, gotHelo)
+					resp = s.handleRcpt(conn, cmd, tx, &phase)
 				case "DATA":
 					resp = s.handleData(conn, cmd, tx, phase, resumeCh)
 					// RFC 5321 §4.1.1.4: reset mail transaction state
@@ -182,7 +191,7 @@ func (s *Server) handleConn(netConn net.Conn) {
 					// still valid, but MAIL FROM / RCPT TO are cleared.
 					if resp != nil {
 						phase = phaseHelo
-						tx = s.newTx(conn)
+						tx = s.resetTx(conn, tx)
 						conn.resetBodyBuf()
 					}
 				case "BDAT":
@@ -190,11 +199,11 @@ func (s *Server) handleConn(netConn net.Conn) {
 					if resp != nil && resp.Code == 250 && !inBdat {
 						// Transaction reset on LAST chunk (handleBdat clears inBdat).
 						phase = phaseInit
-						tx = s.newTx(conn)
+						tx = s.resetTx(conn, tx)
 					}
 				case "RSET":
 					resp = &Response{250, "2.0.0 OK"}
-					tx = s.newTx(conn)
+					tx = s.resetTx(conn, tx)
 					conn.resetBodyBuf()
 					phase = phaseInit
 					inBdat = false
@@ -381,52 +390,42 @@ func validateHeloDomain(domain string) bool {
 	return true
 }
 
-func (s *Server) handleHelo(
-	conn *connState, cmd smtpCmd, tx *Tx, gotHelo bool,
-) (*Response, bool) {
-	if gotHelo {
-		return &Response{503, "5.5.1 HELO already received"}, gotHelo
+// handleGreeting validates a HELO or EHLO argument, calls the handler, and
+// returns a fresh Tx on acceptance.  A fresh Tx implements the reset that
+// RFC 5321 §4.1.4 requires for a later EHLO.  On rejection the current
+// transaction state is unchanged.
+func (s *Server) handleGreeting(
+	conn *connState, cmd smtpCmd, extended bool,
+) (*Response, *Tx) {
+	label := "HELO"
+	if extended {
+		label = "EHLO"
 	}
-	tx.Helo = cmd.args
-	if tx.Helo == "" {
-		return &Response{501, "5.5.2 HELO requires domain"}, false
+	if cmd.args == "" {
+		return &Response{501, "5.5.2 " + label + " requires domain"}, nil
 	}
-	if !validateHeloDomain(tx.Helo) {
-		return &Response{501, "5.5.2 Invalid HELO domain"}, false
+	if !validateHeloDomain(cmd.args) {
+		return &Response{501, "5.5.2 Invalid " + label + " domain"}, nil
 	}
-	resp := s.Handler.Hello(conn.ctx, tx)
-	if resp == nil || resp.Code != 250 {
-		if resp == nil {
-			resp = RespBadSeq
-		}
-		return resp, false
-	}
-	return &Response{250, s.Hostname}, true
-}
 
-func (s *Server) handleEhlo(
-	conn *connState, cmd smtpCmd, tx *Tx, gotHelo bool,
-) (*Response, bool) {
-	if gotHelo {
-		return &Response{503, "5.5.1 EHLO already received"}, gotHelo
-	}
-	tx.Helo = cmd.args
-	if tx.Helo == "" {
-		return &Response{501, "5.5.2 EHLO requires domain"}, false
-	}
-	if !validateHeloDomain(tx.Helo) {
-		return &Response{501, "5.5.2 Invalid EHLO domain"}, false
-	}
-	resp := s.Handler.Hello(conn.ctx, tx)
+	next := s.newTx(conn)
+	next.Helo = cmd.args
+
+	resp := s.Handler.Hello(conn.ctx, next)
 	if resp == nil || resp.Code != 250 {
 		if resp == nil {
 			resp = RespBadSeq
 		}
-		return resp, false
+		return resp, nil
 	}
+
+	if !extended {
+		return &Response{250, s.Hostname}, next
+	}
+
 	// Build multi-line EHLO response with extension list.
 	var ext []string
-	ext = append(ext, s.Hostname+" Hello "+tx.Helo)
+	ext = append(ext, s.Hostname+" Hello "+next.Helo)
 	ext = append(ext, "PIPELINING")
 	ext = append(ext, "8BITMIME")
 	ext = append(ext, "ENHANCEDSTATUSCODES")
@@ -447,32 +446,38 @@ func (s *Server) handleEhlo(
 		}
 		if err != nil {
 			s.logError("ehlo_write_error", slog.String("error", err.Error()))
-			return nil, false
+			return nil, nil
 		}
 	}
-	return nil, true // already wrote response
+	return nil, next // already wrote the response
+}
+
+func (s *Server) handleHelo(conn *connState, cmd smtpCmd) (*Response, *Tx) {
+	return s.handleGreeting(conn, cmd, false)
+}
+
+func (s *Server) handleEhlo(conn *connState, cmd smtpCmd) (*Response, *Tx) {
+	return s.handleGreeting(conn, cmd, true)
 }
 
 func (s *Server) handleStartTLS(
-	conn *connState, tx *Tx,
-	gotHelo, tlsReady bool,
-	resumeCh chan<- struct{},
-) (*Response, bool) {
+	conn *connState, tx *Tx, resumeCh chan<- struct{},
+) (*Response, *Tx) {
 	// Signal resumeCh on every return — the reader goroutine is paused
 	// waiting for the TLS handshake to finish.
 	defer func() { resumeCh <- struct{}{} }()
 
-	if tlsReady {
-		return &Response{503, "5.5.1 STARTTLS already done"}, true
+	if conn.tlsState != nil {
+		return &Response{503, "5.5.1 STARTTLS already done"}, nil
 	}
-	if !gotHelo {
-		return &Response{503, "5.5.1 EHLO required first"}, false
+	if tx.Helo == "" {
+		return &Response{503, "5.5.1 EHLO required first"}, nil
 	}
 	if s.TLSConfig == nil {
-		return &Response{502, "5.5.1 STARTTLS not supported"}, false
+		return &Response{502, "5.5.1 STARTTLS not supported"}, nil
 	}
 	if err := conn.write("220 2.0.0 Ready to start TLS\r\n", s.WriteTimeout); err != nil {
-		return &Response{454, "4.7.0 TLS handshake failed"}, false
+		return &Response{454, "4.7.0 TLS handshake failed"}, nil
 	}
 
 	// Apply a deadline to prevent a slow TLS handshake from blocking
@@ -485,23 +490,23 @@ func (s *Server) handleStartTLS(
 		_ = conn.netConn.SetDeadline(time.Time{})
 		s.logError("tls_handshake_error", slog.String("error", err.Error()))
 		_ = conn.Close()
-		return nil, false
+		return nil, nil
 	}
 	_ = conn.netConn.SetDeadline(time.Time{})
 	conn.upgradeToTLS(tlsConn)
-	tx.TLS = conn.tlsState
 
-	return nil, true // no response line needed; client will re-EHLO
+	// RFC 3207 §4.2: reset the protocol to the initial state.  The new
+	// Tx keeps the connection's TLS state.
+	return nil, s.newTx(conn)
 }
 
 func (s *Server) handleMail(
-	conn *connState, cmd smtpCmd, tx *Tx,
-	phase int, gotHelo, tlsReady bool,
+	conn *connState, cmd smtpCmd, tx *Tx, phase int,
 ) *Response {
-	if s.TLSConfig != nil && !tlsReady {
+	if s.TLSConfig != nil && conn.tlsState == nil {
 		return &Response{530, "5.7.0 STARTTLS required first"}
 	}
-	if !gotHelo {
+	if tx.Helo == "" {
 		return &Response{503, "5.5.1 EHLO required first"}
 	}
 	if phase >= phaseMail {
@@ -541,10 +546,9 @@ func (s *Server) handleMail(
 }
 
 func (s *Server) handleRcpt(
-	conn *connState, cmd smtpCmd, tx *Tx,
-	phase *int, gotHelo bool,
+	conn *connState, cmd smtpCmd, tx *Tx, phase *int,
 ) *Response {
-	if !gotHelo {
+	if tx.Helo == "" {
 		return &Response{503, "5.5.1 EHLO required first"}
 	}
 	if *phase < phaseMail {
@@ -1016,6 +1020,15 @@ func (s *Server) writePostcat(mailFrom string, accepted []string, body []byte) {
 			slog.String("path", path),
 		)
 	}
+}
+
+// resetTx creates a fresh transaction and keeps the session-level greeting.
+// RSET, DATA, and BDAT LAST reset the transaction, not the HELO/EHLO state
+// (RFC 5321 §4.1.1.5).
+func (s *Server) resetTx(conn *connState, old *Tx) *Tx {
+	next := s.newTx(conn)
+	next.Helo = old.Helo
+	return next
 }
 
 // newTx creates a fresh transaction state for a connection.  The TLS

@@ -95,7 +95,7 @@ reading the code and by the concurrency tests.
 | ID | Requirement | Status |
 |---|---|---|
 | P1 | HELO and EHLO MUST reject an empty argument with 501, an argument longer than 255 bytes with 501, and an argument containing a control character with 501. Rejection MUST leave the state unchanged. | ok |
-| P2 | A later EHLO in the same session MUST be accepted and MUST reset the transaction, as if RSET had run (RFC 5321 §4.1.4). | gap (X1) |
+| P2 | A later HELO or EHLO in the same session MUST be accepted when the argument is valid, and MUST reset the transaction as if RSET had run (RFC 5321 §4.1.4). A rejected greeting MUST leave the state unchanged. | ok |
 | P3 | MAIL MUST require `FROM:<path>` syntax. The path MAY be empty (`<>`) for the null sender. Parameters MUST be parsed as case-insensitive keys with optional values. | ok |
 | P4 | MAIL out of sequence MUST return 503. Malformed syntax MUST return 501. A `SIZE` parameter above the limit MUST return 552 before the handler is called. | ok |
 | P5 | RCPT MUST require MAIL first, else 503. An address longer than 320 bytes or containing a control character MUST return 501. Exceeding `MaxRecipients` MUST return 452. | ok |
@@ -133,7 +133,7 @@ reading the code and by the concurrency tests.
 | ID | Requirement | Status |
 |---|---|---|
 | H1 | A nil response from any callback MUST become `503 5.5.1 Bad sequence of commands`. | ok |
-| H2 | `Hello` MUST run after a valid HELO or EHLO, before any other callback for that session. A non-250 response MUST reject the greeting and MUST leave `gotHelo` false. | ok |
+| H2 | `Hello` MUST run after a valid HELO or EHLO, before any other callback for that session. A non-250 response MUST reject the greeting and MUST leave the existing transaction state unchanged. | ok |
 | H3 | `MailFrom` MUST run after a valid MAIL command, before RCPT. A non-250 response MUST reject the sender. | ok |
 | H4 | `RcptTo` MUST run once per RCPT command. The presented recipient MUST be the last element of `tx.Rcpts`. A 250 response MUST add it to `tx.Accepted`; any other code MUST add a `Rejection`. | ok |
 | H5 | `Data` MUST receive the dot-unstuffed RFC 5322 bytes. The server does not promise the slice's lifetime after the callback returns; a handler that retains it MUST copy it. | ok* |
@@ -209,7 +209,6 @@ date and an owner, not a licence to keep the behaviour.
 
 | ID | Severity | Clause | Current behaviour | Evidence | Fix |
 |---|---|---|---|---|---|
-| X1 | High | P2 | A second HELO or EHLO returns 503. RFC 5321 §4.1.4 requires acceptance and a transaction reset. Clients that re-EHLO after RSET fail. | `smtp.go:384-409`; `TestSMTPHeloTwiceRejected`, `TestSMTPEhloAfterHelo` assert the gap | Accept the command when the argument is valid, run `newTx`, clear BDAT state, call `Hello` again. Update both tests. |
 | X2 | High | E2 | EHLO after a successful STARTTLS still lists STARTTLS. A second STARTTLS then returns 503. RFC 3207 §4.2 forbids the advertisement. | `smtp.go:432-434`; no test | Add `&& !tlsReady` to the advertisement. Add a test that asserts the post-TLS EHLO list has no STARTTLS. |
 | X4 | High | P17 | `readLine` calls `bufio.Reader.ReadString` and checks the length afterwards, so a long line is buffered in full. An over-long line closes the socket with no reply. | `smtp.go:926-940`; probe: a 1 MiB line produced no response | Read with a bounded buffer, or use `ReadSlice` and count. Return 500 and close after the limit. Add a test at 512 bytes and at 64 KiB. |
 | X5 | High | E5 | When `TLSConfig` is set, MAIL returns 530 until the client upgrades. A public MX then refuses all plaintext mail. | `smtp.go:500-502`; RFC 3207 §3.1 | Add `RequireTLS bool` (default false). Keep 530 only when it is true. Document the change in an ADR. |

@@ -62,8 +62,8 @@ The client identifies itself. The server validates the argument, then calls
 - Any 250 message from `Hello` is replaced with the server hostname.
 - After EHLO the server advertises PIPELINING, 8BITMIME, ENHANCEDSTATUSCODES,
   SMTPUTF8, CHUNKING, `SIZE <bytes>`, and STARTTLS when TLS is configured.
-- A second HELO or EHLO currently returns 503. RFC 5321 §4.1.4 requires the
-  server to accept it and reset the transaction (gap X1).
+- A later HELO or EHLO is accepted. It resets the transaction as if RSET had
+  run (RFC 5321 §4.1.4). A rejected greeting leaves the state unchanged.
 
 ### 3. MAIL FROM: phaseMail
 

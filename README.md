@@ -172,7 +172,7 @@ The SMTPS path works and `Tx.TLS` is populated.
 | SIZE | Always advertised (default 25 MiB) |
 | CHUNKING / BDAT (RFC 3030) | Yes |
 | Graceful shutdown | Yes; the caller closes the listener |
-| Re-EHLO in one session | Rejected with 503 (X1) |
+| Re-EHLO in one session | Accepted; resets the transaction |
 
 `README.md` claims and the code can differ. The spec wins.
 

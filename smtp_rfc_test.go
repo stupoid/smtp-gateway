@@ -394,26 +394,88 @@ func TestSMTPUnknownCommand(t *testing.T) {
 // HELO / EHLO state machine
 // ---------------------------------------------------------------------------
 
-func TestSMTPHeloTwiceRejected(t *testing.T) {
+func TestSMTPHeloTwiceResets(t *testing.T) {
 	conn, scanner := dialServer(t)
 
 	sendAndExpect(t, conn, scanner, "EHLO first\r\n", "250")
 	_ = readMultiline(t, scanner)
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
 
-	// Second HELO after one already accepted → 503
-	sendAndExpect(t, conn, scanner, "HELO second\r\n", "503")
+	// RFC 5321 §4.1.4: a later greeting is accepted and resets the
+	// transaction as if RSET had run.
+	sendAndExpect(t, conn, scanner, "HELO second\r\n", "250")
+
+	// The reset removed MAIL state, so RCPT is now out of sequence.
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "503")
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
 
 	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
 }
 
-func TestSMTPEhloAfterHelo(t *testing.T) {
+func TestSMTPEhloAfterHeloResets(t *testing.T) {
 	conn, scanner := dialServer(t)
 
 	sendAndExpect(t, conn, scanner, "HELO mx\r\n", "250")
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
 
-	// EHLO after HELO → 503 (greeting already received)
-	sendAndExpect(t, conn, scanner, "EHLO mx\r\n", "503")
+	sendAndExpect(t, conn, scanner, "EHLO mx\r\n", "250")
+	_ = readMultiline(t, scanner)
 
+	// A new transaction is required after the reset.
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "503")
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+
+	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
+}
+
+// rejectDomainHandler rejects one HELO domain.  The other callbacks
+// accept everything.
+type rejectDomainHandler struct{ acceptAllHandler }
+
+func (h *rejectDomainHandler) Hello(_ context.Context, tx *Tx) *Response {
+	if tx.Helo == "bad.example" {
+		return &Response{550, "5.7.1 Rejected"}
+	}
+	return RespHelloOK
+}
+
+// TestSMTPRejectedEhloKeepsState verifies RFC 5321 §4.1.4: when a later
+// EHLO is not acceptable, the server stays in the state it had before.
+func TestSMTPRejectedEhloKeepsState(t *testing.T) {
+	h := &rejectDomainHandler{}
+	srv := &Server{
+		Hostname:    "test.local",
+		Handler:     h,
+		ReadTimeout: 5 * time.Second,
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() { _ = srv.Serve(l) }()
+
+	conn, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	scanner := bufio.NewScanner(conn)
+	if !scanner.Scan() {
+		t.Fatalf("no banner: %v", scanner.Err())
+	}
+
+	sendAndExpect(t, conn, scanner, "EHLO good.example\r\n", "250")
+	_ = readMultiline(t, scanner)
+	sendAndExpect(t, conn, scanner, "MAIL FROM:<s@t>\r\n", "250")
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r@t>\r\n", "250")
+
+	// The handler rejects this greeting, so the transaction survives.
+	sendAndExpect(t, conn, scanner, "EHLO bad.example\r\n", "550")
+
+	sendAndExpect(t, conn, scanner, "RCPT TO:<r2@t>\r\n", "250")
 	sendAndExpect(t, conn, scanner, "QUIT\r\n", "221")
 }
 

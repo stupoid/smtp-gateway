@@ -125,9 +125,10 @@ pause, the two goroutines race for bytes on the same connection.
 ### Transaction
 
 `Tx` holds the envelope state. The server replaces it after `RSET`, after
-`DATA`, and after a successful `BDAT ... LAST`. `tx.Rcpts` keeps all presented
-recipients. `tx.Accepted` and `tx.Rejected` keep the split. `Data` runs only
-when at least one recipient was accepted.
+`DATA`, after a successful `BDAT ... LAST`, after a later HELO/EHLO, and after
+a successful `STARTTLS`. `tx.Rcpts` keeps all presented recipients.
+`tx.Accepted` and `tx.Rejected` keep the split. `Data` runs only when at least
+one recipient was accepted.
 
 ### Handler
 
@@ -145,7 +146,7 @@ Each one has a clause in `docs/spec.md`.
 | The reader is the only reader; the worker writes all replies in order | C2 |
 | The reader pauses during DATA, BDAT, and STARTTLS | C3 |
 | The watchdog closes the socket 50 ms after context cancel | C4 |
-| `Tx` is replaced after RSET and after a completed transaction | T1, T6, T7 |
+| `Tx` is replaced after RSET, a completed transaction, a greeting, and STARTTLS | T1, T6, T7, P2, T10 |
 | `Data` runs only with at least one accepted recipient | T5 |
 | Callbacks are serial per connection and concurrent across connections | T8 |
 | A nil handler response becomes `503` | H1 |
@@ -231,7 +232,7 @@ RFC 5321 §4.1.4 requires a server to accept a later EHLO and to reset
 the state as if RSET had run. We returned 503, so clients that re-issue
 EHLO after RSET were disconnected.
 
-Refs: P2, X1, D2
+Refs: P2
 ```
 
 ## Where docs go
@@ -295,5 +296,4 @@ Write for a reader who is tired and in a hurry.
   struct-literal path.
 - `IdleTimeout` has no effect when `ReadTimeout` is set (gap X19). `Serve`
   always makes `ReadTimeout` non-zero.
-- `smtp_rfc_test.go` asserts the re-EHLO rejection (`X1`). The STARTTLS
-  re-advertisement (`X2`) has no test yet.
+- The STARTTLS re-advertisement (`X2`) has no test yet.
