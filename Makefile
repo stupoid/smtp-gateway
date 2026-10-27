@@ -7,16 +7,17 @@
 
 GO ?= go
 GOLANGCI_LINT ?= golangci-lint
+GO_FILES := $(shell git ls-files '*.go')
 
 .PHONY: check fmt fmt-check vet lint test cover e2e examples
 
 check: fmt-check vet lint test
 
 fmt:
-	gofmt -w .
+	gofmt -w $(GO_FILES)
 
 fmt-check:
-	@out="$$(gofmt -l .)"; \
+	@out="$$(gofmt -l $(GO_FILES))"; \
 	if [ -n "$$out" ]; then \
 		echo "gofmt needed:"; \
 		echo "$$out"; \
