@@ -187,10 +187,11 @@ reading the code and by the concurrency tests.
 | Q1 | `make check` MUST pass on a clean checkout: gofmt, `go vet`, golangci-lint, and `go test -race ./...`. | ok |
 | Q2 | CI MUST run a gofmt check, lint, race tests, and the eight e2e suites on Linux. | ok |
 | Q3 | A test MUST NOT protect a known gap without an `X` reference in a comment. | contract |
-| Q4 | Parsers SHOULD have fuzz targets: `parseMailFrom`, `parseRcptTo`, `parseBdatArgs`, and `readDotUnstuffed`. | gap (X13) |
+| Q4 | Parsers MUST have fuzz targets: `parseSMTPCommand`, `parseMailFrom`, `parseRcptTo`, `parseBdatArgs`, and `readDotUnstuffed`. | ok |
 | Q5 | The module MUST build and pass tests on the Go version in `go.mod` (1.21). CI MUST test that version. | ok |
 | Q6 | Releases SHOULD be tagged with semantic versions so `go get` resolves a stable version. No tag exists today. | gap (X14) |
 | Q7 | Commits MUST be atomic and follow `AGENTS.md`. Documents MUST change in the commit that makes them true. | contract |
+| Q8 | Every `cmd` package SHOULD have at least one test of its argument handling or helpers. | gap (X13) |
 
 ## 13. Non-goals
 
@@ -210,7 +211,7 @@ date and an owner, not a licence to keep the behaviour.
 
 | ID | Severity | Clause | Current behaviour | Evidence | Fix |
 |---|---|---|---|---|---|
-| X13 | Medium | Q4 | No fuzz targets exist. All four CLI packages have 0% coverage. | `grep -r "func Fuzz" .` returns nothing; `go tool cover` | Add fuzz tests for the parsers and body reader. Add one test per CLI. |
+| X13 | Low | Q8 | The `cmd` packages have almost no tests: `postcat`, `verify-postcat`, and `test-server` have none. `postcat-replay` covers its helpers but not `main`. | `go test -cover ./cmd/...` | Extract a `run` function per command and add one test for argument handling and helpers. |
 | X14 | Low | Q6 | The repository has no tags. `go get` resolves a pseudo-version. | `git tag` is empty | Tag `v0.1.0` when the API is ready. |
 
 Severity: High means protocol non-compliance or a denial-of-service risk.
@@ -225,6 +226,7 @@ a defect with a narrow trigger or a documentation defect.
 | `smtp_rfc_test.go` | TCP-level protocol, STARTTLS, BDAT, SMTPUTF8, size limits, shutdown, connection cap, bare-LF smuggling |
 | `smtp_bench_test.go` | Benchmarks only |
 | `gateway_test.go` | `NewServer`, options, `SlogLogger` |
+| `fuzz_test.go` | Fuzz seeds for the parsers and the body reader |
 | `example_test.go` | Package example |
 | `internal/postcat/postcat_test.go` | `Write`, `Parse`, null sender, empty body |
 | `e2e/run-e2e*.sh` | Real clients: swaks, mutt, msmtp, curl; TLS, BDAT, pipelining, concurrency |
