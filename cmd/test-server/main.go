@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -33,23 +34,30 @@ func (h *acceptAllHandler) Data(_ context.Context, _ *smtpgateway.Tx, _ []byte) 
 }
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	tlsCert := flag.String("tls-cert", "", "TLS certificate file (enables STARTTLS)")
-	tlsKey := flag.String("tls-key", "", "TLS key file (enables STARTTLS)")
-	requireTLS := flag.Bool("require-tls", false, "reject plaintext MAIL with 530")
-	flag.Parse()
+func run(args []string, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("test-server", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	tlsCert := fs.String("tls-cert", "", "TLS certificate file (enables STARTTLS)")
+	tlsKey := fs.String("tls-key", "", "TLS key file (enables STARTTLS)")
+	requireTLS := fs.Bool("require-tls", false, "reject plaintext MAIL with 530")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
 
-	if flag.NArg() < 2 {
+	if fs.NArg() < 2 {
 		return errors.New("usage: test-server [-tls-cert cert.pem -tls-key key.pem] [-require-tls] <listen-addr> <postcat-dir>")
 	}
-	addr := flag.Arg(0)
-	postcatDir := flag.Arg(1)
+	addr := fs.Arg(0)
+	postcatDir := fs.Arg(1)
 
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -75,13 +83,13 @@ func run() error {
 	}
 	srv.RequireTLS = *requireTLS
 
-	fmt.Printf("LISTENING %s\n", ln.Addr().String())
+	_, _ = fmt.Fprintf(stdout, "LISTENING %s\n", ln.Addr().String())
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 		<-sigCh
-		fmt.Fprintf(os.Stderr, "shutting down...\n")
+		_, _ = fmt.Fprintf(stderr, "shutting down...\n")
 		_ = ln.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

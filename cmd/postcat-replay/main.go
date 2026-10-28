@@ -25,26 +25,38 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", ":2525", "SMTP server address")
-	flag.Parse()
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
 
-	if flag.NArg() < 1 {
-		fmt.Fprintf(os.Stderr, "usage: postcat-replay [flags] <file.eml>...\n")
-		os.Exit(1)
+func run(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("postcat-replay", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	addr := fs.String("addr", ":2525", "SMTP server address")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+
+	if fs.NArg() < 1 {
+		_, _ = fmt.Fprintf(stderr, "usage: postcat-replay [flags] <file.eml>...\n")
+		return 1
 	}
 
 	failed := 0
-	for _, path := range flag.Args() {
+	for _, path := range fs.Args() {
 		if err := replay(*addr, path); err != nil {
-			fmt.Fprintf(os.Stderr, "FAIL %s: %v\n", path, err)
+			_, _ = fmt.Fprintf(stderr, "FAIL %s: %v\n", path, err)
 			failed++
 		} else {
-			fmt.Printf("OK   %s\n", path)
+			_, _ = fmt.Fprintf(stdout, "OK   %s\n", path)
 		}
 	}
 	if failed > 0 {
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func replay(addr, path string) error {

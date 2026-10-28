@@ -3,6 +3,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -10,31 +11,42 @@ import (
 )
 
 func main() {
-	if len(os.Args) == 2 && (os.Args[1] == "-h" || os.Args[1] == "--help") {
-		fmt.Fprintf(os.Stderr, "Usage: verify-postcat <directory>\n")
-		fmt.Fprintf(os.Stderr, "Scan a directory of postcat files and report parse errors.\n")
-		os.Exit(0)
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 1 && (args[0] == "-h" || args[0] == "--help") {
+		usage(stderr)
+		return 0
 	}
-	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "Usage: verify-postcat <directory>\n")
-		os.Exit(1)
+	if len(args) < 1 {
+		usage(stderr)
+		return 1
 	}
-	entries, err := os.ReadDir(os.Args[1])
+
+	entries, err := os.ReadDir(args[0])
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "readdir: %v\n", err)
-		os.Exit(1)
+		_, _ = fmt.Fprintf(stderr, "readdir: %v\n", err)
+		return 1
 	}
+
 	pass := 0
 	for _, e := range entries {
-		path := filepath.Join(os.Args[1], e.Name())
+		path := filepath.Join(args[0], e.Name())
 		msg, err := postcat.Parse(path)
 		if err != nil {
-			fmt.Printf("FAIL %s: %v\n", e.Name(), err)
-			os.Exit(1)
+			_, _ = fmt.Fprintf(stdout, "FAIL %s: %v\n", e.Name(), err)
+			return 1
 		}
-		fmt.Printf("OK   %s  sender=%-20s  recipients=%-40s  body_len=%d\n",
+		_, _ = fmt.Fprintf(stdout, "OK   %s  sender=%-20s  recipients=%-40s  body_len=%d\n",
 			e.Name(), msg.Sender, fmt.Sprint(msg.Recipients), len(msg.RawMessage))
 		pass++
 	}
-	fmt.Printf("\n%d postcat file(s) verified OK\n", pass)
+	_, _ = fmt.Fprintf(stdout, "\n%d postcat file(s) verified OK\n", pass)
+	return 0
+}
+
+func usage(w io.Writer) {
+	_, _ = fmt.Fprintf(w, "Usage: verify-postcat <directory>\n")
+	_, _ = fmt.Fprintf(w, "Scan a directory of postcat files and report parse errors.\n")
 }
