@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stupoid/smtp-gateway/internal/postcat"
 )
 
 func TestFormatSender(t *testing.T) {
@@ -96,5 +98,90 @@ func TestSendBody(t *testing.T) {
 				t.Errorf("sendBody = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRunUsage(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if code := run(nil, &out, &errOut); code != 1 {
+		t.Errorf("run code = %d, want 1", code)
+	}
+	if !strings.Contains(errOut.String(), "usage: postcat-replay") {
+		t.Errorf("stderr = %q, want usage", errOut.String())
+	}
+}
+
+func TestRunReplaysMessage(t *testing.T) {
+	dir := t.TempDir()
+	path, err := postcat.Write(dir, "s@t.com", []string{"r@t.com"}, []byte("Subject: test\r\n\r\nhello\r\n"))
+	if err != nil {
+		t.Fatalf("postcat.Write: %v", err)
+	}
+
+	addr, stop := fakeSMTPServer(t)
+	defer stop()
+
+	var out, errOut bytes.Buffer
+	if code := run([]string{"-addr", addr, path}, &out, &errOut); code != 0 {
+		t.Fatalf("run code = %d, stderr = %s", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "OK   "+path) {
+		t.Errorf("stdout = %q, want an OK line", out.String())
+	}
+}
+
+// fakeSMTPServer accepts one message and replies to the command
+// sequence that replay uses.  It fails the test only on setup.
+func fakeSMTPServer(t *testing.T) (string, func()) {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		r := bufio.NewReader(conn)
+		_, _ = io.WriteString(conn, "220 test\r\n")
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			cmd := strings.ToUpper(strings.TrimSpace(line))
+			switch {
+			case strings.HasPrefix(cmd, "EHLO"):
+				_, _ = io.WriteString(conn, "250 test\r\n")
+			case strings.HasPrefix(cmd, "MAIL"):
+				_, _ = io.WriteString(conn, "250 2.1.0 OK\r\n")
+			case strings.HasPrefix(cmd, "RCPT"):
+				_, _ = io.WriteString(conn, "250 2.1.5 OK\r\n")
+			case cmd == "DATA":
+				_, _ = io.WriteString(conn, "354 go ahead\r\n")
+				for {
+					bodyLine, err := r.ReadString('\n')
+					if err != nil {
+						return
+					}
+					if bodyLine == ".\r\n" {
+						break
+					}
+				}
+				_, _ = io.WriteString(conn, "250 2.0.0 OK\r\n")
+			case cmd == "QUIT":
+				_, _ = io.WriteString(conn, "221 bye\r\n")
+				return
+			}
+		}
+	}()
+	return l.Addr().String(), func() {
+		_ = l.Close()
+		<-done
 	}
 }

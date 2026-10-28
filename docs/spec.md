@@ -192,7 +192,7 @@ reading the code and by the concurrency tests.
 | Q5 | The module MUST build and pass tests on the Go version in `go.mod` (1.21). CI MUST test that version. | ok |
 | Q6 | Releases SHOULD be tagged with semantic versions so `go get` resolves a stable version. No tag exists today. | gap (X14) |
 | Q7 | Commits MUST be atomic and follow `AGENTS.md`. Documents MUST change in the commit that makes them true. | contract |
-| Q8 | Every `cmd` package SHOULD have at least one test of its argument handling or helpers. | gap (X13) |
+| Q8 | Every `cmd` package MUST have at least one test of its argument handling or helpers. | ok |
 | Q9 | `go test` MUST fail when a clause ID, status, gap reference, or relative link is inconsistent. | ok |
 
 ## 13. Non-goals
@@ -214,7 +214,6 @@ fixed gap is removed and the numbers do not close up.
 
 | ID | Severity | Clause | Current behaviour | Evidence | Fix |
 |---|---|---|---|---|---|
-| X13 | Low | Q8 | The `cmd` packages have almost no tests: `postcat`, `verify-postcat`, and `test-server` have none. `postcat-replay` covers its helpers but not `main`. | `go test -cover ./cmd/...` | Extract a `run` function per command and add one test for argument handling and helpers. |
 | X14 | Low | Q6 | The repository has no tags. `go get` resolves a pseudo-version. | `git tag` is empty | Tag `v0.1.0` when the API is ready. |
 
 Severity: High means protocol non-compliance or a denial-of-service risk.
@@ -231,12 +230,12 @@ a defect with a narrow trigger or a documentation defect.
 | `gateway_test.go` | `NewServer`, options, `SlogLogger` |
 | `fuzz_test.go` | Fuzz seeds for the parsers and the body reader |
 | `docs_integrity_test.go` | Clause IDs, status values, gap references, and relative links |
-| `cmd/postcat-replay/main_test.go` | Replay helpers: reply reader, dot-stuffing, sender formatting |
+| `cmd/*/main_test.go` | CLI argument handling, help text, output, and replay helpers |
 | `example_test.go` | Package example |
 | `internal/postcat/postcat_test.go` | `Write`, `Parse`, null sender, empty body |
 | `e2e/run-e2e*.sh` | Real clients: swaks, mutt, msmtp, curl; TLS, BDAT, pipelining, concurrency |
 
-Coverage on 2026-10-27: 74.0% of statements across all packages. Recompute with:
+Coverage on 2026-10-28: 82.8% of statements across all packages. Recompute with:
 
 ```bash
 go test -count=1 -coverprofile=coverage.out ./...
