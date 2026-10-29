@@ -190,7 +190,7 @@ reading the code and by the concurrency tests.
 | Q3 | A test MUST NOT protect a known gap without an `X` reference in a comment. | contract |
 | Q4 | Parsers MUST have fuzz targets: `parseSMTPCommand`, `parseMailFrom`, `parseRcptTo`, `parseBdatArgs`, and `readDotUnstuffed`. | ok |
 | Q5 | The module MUST build and pass tests on the Go version in `go.mod` (1.21). CI MUST test that version. | ok |
-| Q6 | Releases SHOULD be tagged with semantic versions so `go get` resolves a stable version. No tag exists today. | gap (X14) |
+| Q6 | Releases MUST be tagged with semantic versions so `go get` resolves a stable version. | ok |
 | Q7 | Commits MUST be atomic and follow `AGENTS.md`. Documents MUST change in the commit that makes them true. | contract |
 | Q8 | Every `cmd` package MUST have at least one test of its argument handling or helpers. | ok |
 | Q9 | `go test` MUST fail when a clause ID, status, gap reference, or relative link is inconsistent. | ok |
@@ -212,9 +212,10 @@ A gap is a known difference between a clause and the code. It is a bug with a
 date and an owner, not a licence to keep the behaviour. Gap IDs are stable: a
 fixed gap is removed and the numbers do not close up.
 
-| ID | Severity | Clause | Current behaviour | Evidence | Fix |
-|---|---|---|---|---|---|
-| X14 | Low | Q6 | The repository has no tags. `go get` resolves a pseudo-version. | `git tag` is empty | Tag `v0.1.0` when the API is ready. |
+No open gaps at v0.1.0.
+
+When a gap opens, add a row with a stable `X` ID, a severity, the clause ID, the
+current behaviour, the evidence, and the fix direction.
 
 Severity: High means protocol non-compliance or a denial-of-service risk.
 Medium means data loss, interop risk, or a broken promise in the docs. Low means

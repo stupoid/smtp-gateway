@@ -3,9 +3,8 @@
 SMTP gateway library for Go. Accept inbound email and route it anywhere:
 S3, Kafka, the local filesystem, `/dev/null`.
 
-Status: pre-1.0. No tagged release yet, so `go get` resolves a pseudo-version.
-The public API can change between commits. The normative behaviour is in
-[docs/spec.md](docs/spec.md).
+Status: v0.1.0. Pre-1.0: the public API can change in a minor release.
+The normative behaviour is in [docs/spec.md](docs/spec.md).
 
 ## Install
 

@@ -15,7 +15,7 @@ It is built for inbound mail: port 25, MX-style traffic, no SMTP AUTH.
 Accepted messages go to your handler. If `PostcatDir` is set, the server also
 writes each accepted message to disk.
 
-Status: pre-1.0, no tagged release. The public API can change. `README.md` is
+Status: pre-1.0, tagged v0.1.0. The public API can change. `README.md` is
 for users. `docs/spec.md` is for conformance.
 
 ## Read in this order
